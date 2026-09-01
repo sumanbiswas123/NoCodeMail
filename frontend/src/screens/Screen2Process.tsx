@@ -101,7 +101,13 @@ export const Screen2Process: React.FC<Screen2Props> = ({
   };
 
   const handleOpenInEditor = () => {
-    onOpenEditor(generatedHtml, `${baseName}.html`);
+    const fullHtmlPath = extractData?.package_dir
+      ? `${extractData.package_dir}\\${baseName}.html`
+      : `${baseName}.html`;
+    if (extractData?.package_dir) {
+      localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
+    }
+    onOpenEditor(generatedHtml, fullHtmlPath);
   };
 
   const copyToClipboard = (text: string) => {

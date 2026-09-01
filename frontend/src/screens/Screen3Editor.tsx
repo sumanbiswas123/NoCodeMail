@@ -53,9 +53,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const [codeCopied, setCodeCopied] = useState(false);
 
   // Folder path of the file on disk
-  const fileFolder = initialFilePath
+  const rawFolder = initialFilePath && (initialFilePath.includes("/") || initialFilePath.includes("\\"))
     ? initialFilePath.replace(/[/\\][^/\\]+$/, "")
     : "";
+  const fileFolder = rawFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
   const normalizedFolder = fileFolder ? fileFolder.replace(/\\/g, "/") : "";
   const pkgPrefix = normalizedFolder ? `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/` : "";
 
@@ -81,6 +82,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const isInternalUpdateRef = useRef<boolean>(false);
+  const hasInitSelectionRef = useRef<boolean>(false);
 
   // Extract base URL for iframe head
   const getBaseUrl = useCallback(() => {
@@ -168,13 +170,28 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     updateSelectionOverlay(target);
   }, [updateSelectionOverlay]);
 
-  // Adjust iframe height to fit its internal content
+  // Adjust iframe height to fit its internal content accurately without runaway scrollHeight growth
   const autoResizeIframe = useCallback(() => {
     const iframe = iframeRef.current;
     if (!iframe || !iframe.contentDocument) return;
     const doc = iframe.contentDocument;
-    const scrollH = Math.max(doc.body?.scrollHeight || 0, doc.documentElement?.scrollHeight || 0, 450);
-    iframe.style.height = `${scrollH + 30}px`;
+    if (!doc.body) return;
+
+    let maxBottom = 0;
+    Array.from(doc.body.children).forEach((child) => {
+      const el = child as HTMLElement;
+      if (el.tagName.toLowerCase() === "script" || el.tagName.toLowerCase() === "style") return;
+      const bottom = el.offsetTop + el.offsetHeight;
+      if (bottom > maxBottom) maxBottom = bottom;
+    });
+
+    if (maxBottom <= 0) {
+      const firstChild = doc.body.firstElementChild as HTMLElement | null;
+      maxBottom = firstChild ? firstChild.offsetHeight : doc.body.scrollHeight;
+    }
+
+    const finalH = Math.max(Math.ceil(maxBottom) + 20, 450);
+    iframe.style.height = `${finalH}px`;
   }, []);
 
   // Export clean HTML (strips <base> tag and editor attributes)
@@ -228,12 +245,28 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const baseTag = baseUrl ? `<base href="${baseUrl}">` : "";
 
     let preparedHtml = currentHtml;
-    if (pkgPrefix) {
-      preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(assets\/[^"']+)["']/gi, `src="${pkgPrefix}$1"`);
-      preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(asset_[^"']+)["']/gi, `src="${pkgPrefix}assets/$1"`);
-      preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?(assets\/[^'")]+)['"]?\)/gi, `url('${pkgPrefix}$1')`);
-      preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?(asset_[^'")]+)['"]?\)/gi, `url('${pkgPrefix}assets/$1')`);
-    }
+    // 1. Rewrite absolute disk paths e.g. src="C:\Users\..." or src="C:/Users/..."
+    preparedHtml = preparedHtml.replace(/src=["'](?:[a-zA-Z]:[/\\][^"']*[/\\]assets[/\\])([^"']+)["']/gi, (_m, fname) => {
+      return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
+    });
+    // 2. Rewrite src="assets/..." or src="./assets/..."
+    preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?assets\/([^"']+)["']/gi, (_m, fname) => {
+      return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
+    });
+    // 3. Rewrite src="asset_..." or src="./asset_..."
+    preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(asset_[^"']+)["']/gi, (_m, fname) => {
+      return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
+    });
+    // 4. Rewrite background-image URLs
+    preparedHtml = preparedHtml.replace(/url\(['"]?(?:[a-zA-Z]:[/\\][^'")]+[/\\]assets[/\\])([^'")]+)['"]?\)/gi, (_m, fname) => {
+      return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
+    });
+    preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?assets\/([^'")]+)['"]?\)/gi, (_m, fname) => {
+      return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
+    });
+    preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?(asset_[^'")]+)['"]?\)/gi, (_m, fname) => {
+      return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
+    });
 
     if (preparedHtml.includes("<head>")) {
       preparedHtml = preparedHtml.replace("<head>", `<head>${baseTag}`);
@@ -267,9 +300,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     setTimeout(autoResizeIframe, 150);
 
     // Event listeners on iframe document
-    const handleDocClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (target) handleSelectElement(target);
+    const handleDocPointerDown = (e: MouseEvent) => {
+      let target = e.target as HTMLElement | null;
+      if (!target || target === doc.body || target === doc.documentElement) return;
+      handleSelectElement(target);
     };
 
     const handleDocInput = () => {
@@ -285,18 +319,25 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       pushHistory(exportPristineHtml());
     };
 
-    doc.addEventListener("click", handleDocClick);
+    doc.addEventListener("pointerdown", handleDocPointerDown, true);
+    doc.addEventListener("click", handleDocPointerDown, true);
     doc.addEventListener("input", handleDocInput);
     doc.addEventListener("blur", handleDocBlur, true);
 
-    // Auto select first element
-    const firstHeading = doc.querySelector("h1, h2, h3, p, a, div");
-    if (firstHeading) {
-      handleSelectElement(firstHeading as HTMLElement);
+    // Auto select first element only on initial load
+    if (!hasInitSelectionRef.current) {
+      hasInitSelectionRef.current = true;
+      const firstHeading = doc.querySelector("h1, h2, h3, p, a, div, img");
+      if (firstHeading) {
+        handleSelectElement(firstHeading as HTMLElement);
+      }
+    } else if (selectedDomElement) {
+      updateSelectionOverlay(selectedDomElement);
     }
 
     return () => {
-      doc.removeEventListener("click", handleDocClick);
+      doc.removeEventListener("pointerdown", handleDocPointerDown, true);
+      doc.removeEventListener("click", handleDocPointerDown, true);
       doc.removeEventListener("input", handleDocInput);
       doc.removeEventListener("blur", handleDocBlur, true);
     };
@@ -424,48 +465,68 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     };
   }, [historyIndex, history, fileName, initialFilePath]);
 
-  // Drag resize handler for selected element
-  const resizeStartRef = useRef<{ startX: number; startY: number; startW: number; startH: number }>({
-    startX: 0,
-    startY: 0,
-    startW: 0,
-    startH: 0,
-  });
-
+  // Drag resize handler for selected element (Smooth 60fps RAF, 0 DOM clone overhead during drag)
   const handleResizeMouseDown = (e: React.MouseEvent, handle: string) => {
+    e.preventDefault();
     e.stopPropagation();
     if (!selectedDomElement || !selectionRect) return;
 
-    resizeStartRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startW: selectionRect.width,
-      startH: selectionRect.height,
-    };
+    const el = selectedDomElement;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = selectionRect.width;
+    const startH = selectionRect.height;
+    let finalW = startW;
+    let finalH = startH;
+    let rafId: number | null = null;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - resizeStartRef.current.startX;
-      const deltaY = moveEvent.clientY - resizeStartRef.current.startY;
-      let newW = resizeStartRef.current.startW;
-      let newH = resizeStartRef.current.startH;
+      moveEvent.preventDefault();
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
+      let newW = startW;
+      let newH = startH;
 
       if (handle.includes("right") || handle.includes("e")) newW += deltaX;
+      if (handle.includes("left") || handle.includes("w")) newW -= deltaX;
       if (handle.includes("bottom") || handle.includes("s")) newH += deltaY;
+      if (handle.includes("top") || handle.includes("n")) newH -= deltaY;
 
-      newW = Math.max(30, newW);
-      newH = Math.max(16, newH);
+      newW = Math.max(20, Math.round(newW));
+      newH = Math.max(14, Math.round(newH));
+      finalW = newW;
+      finalH = newH;
 
-      handleUpdateStyle("width", `${Math.round(newW)}px`);
-      handleUpdateStyle("height", `${Math.round(newH)}px`);
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        el.style.width = `${newW}px`;
+        el.style.height = `${newH}px`;
+        updateSelectionOverlay(el);
+      });
     };
 
     const handleMouseUp = () => {
+      if (rafId) cancelAnimationFrame(rafId);
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+
+      // Commit to React state and push a single Undo history checkpoint
+      el.style.width = `${finalW}px`;
+      el.style.height = `${finalH}px`;
+      setInlineStyles((prev) => ({
+        ...prev,
+        width: `${finalW}px`,
+        height: `${finalH}px`,
+      }));
+      updateSelectionOverlay(el);
+      autoResizeIframe();
+      setIsSaved(false);
+      isInternalUpdateRef.current = true;
+      pushHistory(exportPristineHtml());
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("mousemove", handleMouseMove, { passive: false });
+    window.addEventListener("mouseup", handleMouseUp, { once: true });
   };
 
   return (

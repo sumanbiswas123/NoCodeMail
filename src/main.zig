@@ -160,6 +160,15 @@ const EMBED_APP_JS = @embedFile("embedded_ui/assets/app.js");
 const EMBED_INDEX_CSS = @embedFile("embedded_ui/assets/index.css");
 const EMBED_FAVICON = @embedFile("embedded_ui/favicon.svg");
 
+var g_last_pkg_buf: [2048]u8 = [_]u8{0} ** 2048;
+var g_last_pkg_len: usize = 0;
+
+pub fn setLastPackageDir(dir: []const u8) void {
+    if (dir.len == 0 or dir.len >= g_last_pkg_buf.len) return;
+    @memcpy(g_last_pkg_buf[0..dir.len], dir);
+    g_last_pkg_len = dir.len;
+}
+
 fn handleConnection(sock: usize) void {
     defer _ = closesocket(sock);
 
@@ -204,8 +213,12 @@ fn handleConnection(sock: usize) void {
                std.mem.startsWith(u8, url_path, "/C%3a") or std.mem.startsWith(u8, url_path, "/c%3a") or
                std.mem.startsWith(u8, url_path, "C:") or std.mem.startsWith(u8, url_path, "c:") or
                std.mem.startsWith(u8, url_path, "D:") or std.mem.startsWith(u8, url_path, "d:") or
-               std.mem.startsWith(u8, url_path, "C%3A") or std.mem.startsWith(u8, url_path, "c%3A")) {
-        // Direct package asset serving by path: /pkg/<encoded_base_dir>/<rel_path> or /pkg/<encoded_full_path> or direct drive path
+               std.mem.startsWith(u8, url_path, "C%3A") or std.mem.startsWith(u8, url_path, "c%3A") or
+               std.mem.startsWith(u8, url_path, "/asset_") or std.mem.startsWith(u8, url_path, "/assets/") or
+               std.mem.endsWith(u8, url_path, ".png") or std.mem.endsWith(u8, url_path, ".jpg") or
+               std.mem.endsWith(u8, url_path, ".jpeg") or std.mem.endsWith(u8, url_path, ".webp") or
+               std.mem.endsWith(u8, url_path, ".gif")) {
+        // Direct package asset serving by path: /pkg/<encoded_base_dir>/<rel_path> or /pkg/<encoded_full_path> or direct drive path or asset filename
         var raw_sub = url_path;
         if (std.mem.startsWith(u8, raw_sub, "/pkg/")) {
             raw_sub = raw_sub[5..];
@@ -242,7 +255,30 @@ fn handleConnection(sock: usize) void {
 
         const disk_target = file_path_buf[0..fpi];
 
-        if (openFileUtf8(disk_target, "rb") orelse fopen(file_path_buf[0..fpi :0].ptr, "rb")) |fh| {
+        var fh_opt = openFileUtf8(disk_target, "rb") orelse fopen(file_path_buf[0..fpi :0].ptr, "rb");
+
+        // If not found directly and we have an active package directory, search inside package assets
+        if (fh_opt == null and g_last_pkg_len > 0) {
+            const pkg_dir = g_last_pkg_buf[0..g_last_pkg_len];
+            // Extract filename part
+            const fname = if (std.mem.lastIndexOfScalar(u8, disk_target, '\\')) |idx| disk_target[idx + 1 ..] else disk_target;
+            // 1. Try {pkg_dir}\assets\{fname}
+            const cand1 = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}\\assets\\{s}", .{ pkg_dir, fname }, 0) catch null;
+            if (cand1) |c1| {
+                defer std.heap.page_allocator.free(c1);
+                fh_opt = openFileUtf8(c1, "rb") orelse fopen(c1.ptr, "rb");
+            }
+            // 2. Try {pkg_dir}\{fname}
+            if (fh_opt == null) {
+                const cand2 = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{s}\\{s}", .{ pkg_dir, fname }, 0) catch null;
+                if (cand2) |c2| {
+                    defer std.heap.page_allocator.free(c2);
+                    fh_opt = openFileUtf8(c2, "rb") orelse fopen(c2.ptr, "rb");
+                }
+            }
+        }
+
+        if (fh_opt) |fh| {
             defer _ = fclose(fh);
             _ = fseek(fh, 0, 2);
             const file_size: usize = @intCast(ftell(fh));
@@ -454,6 +490,11 @@ pub const App = struct {
             const u8_len = std.unicode.utf16LeToUtf8(&utf8_buf, file_buf_w[0..w_len]) catch 0;
             if (u8_len > 0) {
                 const selected = utf8_buf[0..u8_len];
+                if (std.mem.lastIndexOfScalar(u8, selected, '\\')) |sidx| {
+                    setLastPackageDir(selected[0..sidx]);
+                } else if (std.mem.lastIndexOfScalar(u8, selected, '/')) |sidx| {
+                    setLastPackageDir(selected[0..sidx]);
+                }
                 const sel_z = std.heap.page_allocator.dupeZ(u8, selected) catch return;
                 defer std.heap.page_allocator.free(sel_z);
 
@@ -689,6 +730,8 @@ pub const App = struct {
             self.w.respond(seq, .ok, res_err) catch {};
             return;
         };
+
+        setLastPackageDir(res.package_dir);
 
         const ResponseStruct = struct {
             success: bool,
