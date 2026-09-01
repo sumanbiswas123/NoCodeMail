@@ -136,8 +136,90 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   };
 
   const [smartSnap, setSmartSnap] = useState<boolean>(true);
+  const [hiddenCategories, setHiddenCategories] = useState<{ text: boolean; shapes: boolean; images: boolean }>({ text: false, shapes: false, images: false });
+  const [hiddenComponentIds, setHiddenComponentIds] = useState<Set<string>>(new Set());
+  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [hoveredComponentId, setHoveredComponentId] = useState<string | null>(null);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"marked" | "layers">("marked");
 
-  // Compute smart magnetic snapping: tight-fit directly to selected components and eliminate empty whitespace
+  // Resize & Move State for Marked Regions
+  const [resizingMark, setResizingMark] = useState<{
+    regionId: string;
+    handle: "nw" | "ne" | "sw" | "se" | "n" | "s" | "w" | "e";
+    startX: number;
+    startY: number;
+    origLeft: number;
+    origTop: number;
+    origRight: number;
+    origBottom: number;
+  } | null>(null);
+
+  const [movingMark, setMovingMark] = useState<{
+    regionId: string;
+    startX: number;
+    startY: number;
+    origLeft: number;
+    origTop: number;
+    origRight: number;
+    origBottom: number;
+  } | null>(null);
+
+  const selectedComponent = (selectedComponentId && !hiddenComponentIds.has(selectedComponentId))
+    ? pageData?.components.find(c => c.id === selectedComponentId) || null
+    : null;
+
+  const toggleComponentVisibility = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setHiddenComponentIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+    // Remove active selection border immediately if hiding this component
+    if (selectedComponentId === id) {
+      setSelectedComponentId(null);
+    }
+  };
+
+  const toggleCategoryVisibility = (cat: "text" | "shapes" | "images") => {
+    setHiddenCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
+  };
+
+  // Magnetic edge snapping helper for resize and move
+  const snapCoordinateToNearbyEdges = (coord: number, isVertical: boolean): number => {
+    if (!smartSnap || !pageData || !pageData.components.length) return coord;
+    const SNAP_DISTANCE = 6; // 6pt magnetic threshold
+    let bestSnap = coord;
+    let minDiff = SNAP_DISTANCE + 1;
+
+    for (const comp of pageData.components) {
+      if (hiddenComponentIds.has(comp.id)) continue;
+      if (comp.type === "text" && hiddenCategories.text) continue;
+      if (comp.type === "path" && hiddenCategories.shapes) continue;
+      if (comp.type === "image" && hiddenCategories.images) continue;
+
+      const [cl, ct, cr, cb] = comp.bbox;
+      if (isVertical) {
+        const diffT = Math.abs(coord - ct);
+        if (diffT < minDiff) { minDiff = diffT; bestSnap = ct; }
+        const diffB = Math.abs(coord - cb);
+        if (diffB < minDiff) { minDiff = diffB; bestSnap = cb; }
+      } else {
+        const diffL = Math.abs(coord - cl);
+        if (diffL < minDiff) { minDiff = diffL; bestSnap = cl; }
+        const diffR = Math.abs(coord - cr);
+        if (diffR < minDiff) { minDiff = diffR; bestSnap = cr; }
+      }
+    }
+
+    return minDiff <= SNAP_DISTANCE ? Math.round(bestSnap * 10) / 10 : Math.round(coord * 10) / 10;
+  };
+
+  // Compute smart magnetic snapping: tight-fit directly to visible selected components and eliminate empty whitespace
   const computeSmartSnappedBounds = (rawL: number, rawT: number, rawR: number, rawB: number) => {
     if (!smartSnap || !pageData || !pageData.components.length) {
       return { left: rawL, top: rawT, right: rawR, bottom: rawB };
@@ -151,6 +233,12 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
     const matchedComps: Array<{ bbox: [number, number, number, number] }> = [];
 
     for (const comp of pageData.components) {
+      // If component or its layer is hidden (peeled away), ignore it completely!
+      if (hiddenComponentIds.has(comp.id)) continue;
+      if (comp.type === "text" && hiddenCategories.text) continue;
+      if (comp.type === "path" && hiddenCategories.shapes) continue;
+      if (comp.type === "image" && hiddenCategories.images) continue;
+
       const [cl, ct, cr, cb] = comp.bbox;
       const cw = cr - cl;
       const ch = cb - ct;
@@ -232,8 +320,47 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
     };
   }, [pageData]);
 
+  const startResize = (region: MarkedRegion, handle: "nw" | "ne" | "sw" | "se" | "n" | "s" | "w" | "e", e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    const pt = clientToPdfCoords(e.clientX, e.clientY);
+    if (!pt) return;
+    setSelectedMarkId(region.id);
+    setResizingMark({
+      regionId: region.id,
+      handle,
+      startX: pt.x,
+      startY: pt.y,
+      origLeft: region.left,
+      origTop: region.top,
+      origRight: region.right,
+      origBottom: region.bottom,
+    });
+  };
+
+  const startMove = (region: MarkedRegion, e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture(e.pointerId);
+    const pt = clientToPdfCoords(e.clientX, e.clientY);
+    if (!pt) return;
+    setSelectedMarkId(region.id);
+    setMovingMark({
+      regionId: region.id,
+      startX: pt.x,
+      startY: pt.y,
+      origLeft: region.left,
+      origTop: region.top,
+      origRight: region.right,
+      origBottom: region.bottom,
+    });
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    if (activeSidebarTab === "layers") {
+      // In Layer Peeler tab, canvas clicks select layers, not drag marker
+      return;
+    }
     const pt = clientToPdfCoords(e.clientX, e.clientY);
     if (!pt) return;
 
@@ -248,43 +375,109 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!activeDrawing) return;
     const pt = clientToPdfCoords(e.clientX, e.clientY);
     if (!pt) return;
 
-    setActiveDrawing(prev => prev ? { ...prev, currentX: pt.x, currentY: pt.y } : null);
+    // 1. Resizing Marked Region
+    if (resizingMark) {
+      const dx = pt.x - resizingMark.startX;
+      const dy = pt.y - resizingMark.startY;
+      let newL = resizingMark.origLeft;
+      let newT = resizingMark.origTop;
+      let newR = resizingMark.origRight;
+      let newB = resizingMark.origBottom;
+
+      const { handle } = resizingMark;
+      if (handle === "nw" || handle === "w" || handle === "sw") {
+        newL = Math.min(snapCoordinateToNearbyEdges(resizingMark.origLeft + dx, false), newR - 5);
+      }
+      if (handle === "ne" || handle === "e" || handle === "se") {
+        newR = Math.max(snapCoordinateToNearbyEdges(resizingMark.origRight + dx, false), newL + 5);
+      }
+      if (handle === "nw" || handle === "n" || handle === "ne") {
+        newT = Math.min(snapCoordinateToNearbyEdges(resizingMark.origTop + dy, true), newB - 5);
+      }
+      if (handle === "sw" || handle === "s" || handle === "se") {
+        newB = Math.max(snapCoordinateToNearbyEdges(resizingMark.origBottom + dy, true), newT + 5);
+      }
+
+      setMarkedRegions(prev => prev.map(r => r.id === resizingMark.regionId ? {
+        ...r,
+        left: Math.round(newL * 10) / 10,
+        top: Math.round(newT * 10) / 10,
+        right: Math.round(newR * 10) / 10,
+        bottom: Math.round(newB * 10) / 10,
+      } : r));
+      return;
+    }
+
+    // 2. Moving Marked Region
+    if (movingMark && pageData) {
+      const dx = pt.x - movingMark.startX;
+      const dy = pt.y - movingMark.startY;
+      const w = movingMark.origRight - movingMark.origLeft;
+      const h = movingMark.origBottom - movingMark.origTop;
+
+      let newL = snapCoordinateToNearbyEdges(movingMark.origLeft + dx, false);
+      let newT = snapCoordinateToNearbyEdges(movingMark.origTop + dy, true);
+
+      newL = Math.max(0, Math.min(pageData.canvas_width_pt - w, newL));
+      newT = Math.max(0, Math.min(pageData.canvas_height_pt - h, newT));
+
+      setMarkedRegions(prev => prev.map(r => r.id === movingMark.regionId ? {
+        ...r,
+        left: Math.round(newL * 10) / 10,
+        top: Math.round(newT * 10) / 10,
+        right: Math.round((newL + w) * 10) / 10,
+        bottom: Math.round((newT + h) * 10) / 10,
+      } : r));
+      return;
+    }
+
+    // 3. Active New Drag Drawing
+    if (activeDrawing) {
+      setActiveDrawing(prev => prev ? { ...prev, currentX: pt.x, currentY: pt.y } : null);
+    }
   };
 
   const handlePointerUp = () => {
-    if (!activeDrawing || !pageData) return;
-    const endX = activeDrawing.currentX;
-    const endY = activeDrawing.currentY;
-
-    const rawLeft = Math.min(activeDrawing.startX, endX);
-    const rawTop = Math.min(activeDrawing.startY, endY);
-    const rawRight = Math.max(activeDrawing.startX, endX);
-    const rawBottom = Math.max(activeDrawing.startY, endY);
-
-    const rawW = rawRight - rawLeft;
-    const rawH = rawBottom - rawTop;
-
-    // Only create marked region if size is deliberate (>= 3pt)
-    if (rawW >= 3 && rawH >= 3) {
-      const snapped = computeSmartSnappedBounds(rawLeft, rawTop, rawRight, rawBottom);
-      const newId = `mark_${Date.now()}_${markedRegions.length + 1}`;
-      const newRegion: MarkedRegion = {
-        id: newId,
-        page: targetPage,
-        left: snapped.left,
-        top: snapped.top,
-        right: snapped.right,
-        bottom: snapped.bottom,
-      };
-      setMarkedRegions(prev => [...prev, newRegion]);
-      setSelectedMarkId(newId);
+    if (resizingMark) {
+      setResizingMark(null);
+    }
+    if (movingMark) {
+      setMovingMark(null);
     }
 
-    setActiveDrawing(null);
+    if (activeDrawing && pageData) {
+      const endX = activeDrawing.currentX;
+      const endY = activeDrawing.currentY;
+
+      const rawLeft = Math.min(activeDrawing.startX, endX);
+      const rawTop = Math.min(activeDrawing.startY, endY);
+      const rawRight = Math.max(activeDrawing.startX, endX);
+      const rawBottom = Math.max(activeDrawing.startY, endY);
+
+      const rawW = rawRight - rawLeft;
+      const rawH = rawBottom - rawTop;
+
+      // Only create marked region if size is deliberate (>= 3pt)
+      if (rawW >= 3 && rawH >= 3) {
+        const snapped = computeSmartSnappedBounds(rawLeft, rawTop, rawRight, rawBottom);
+        const newId = `mark_${Date.now()}_${markedRegions.length + 1}`;
+        const newRegion: MarkedRegion = {
+          id: newId,
+          page: targetPage,
+          left: snapped.left,
+          top: snapped.top,
+          right: snapped.right,
+          bottom: snapped.bottom,
+        };
+        setMarkedRegions(prev => [...prev, newRegion]);
+        setSelectedMarkId(newId);
+      }
+
+      setActiveDrawing(null);
+    }
   };
 
   // Instant Click-to-Mark component
@@ -729,10 +922,13 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                   onPointerUp={handlePointerUp}
                 >
                   {/* Shapes / Cards Layer */}
-                  {showPathOverlay && pathComponents.map((comp) => {
+                  {showPathOverlay && !hiddenCategories.shapes && pathComponents.map((comp) => {
+                    if (hiddenComponentIds.has(comp.id)) return null;
                     const [l, t, r, b] = comp.bbox;
                     const w = r - l;
                     const h = b - t;
+                    const isSelected = selectedComponentId === comp.id && !hiddenComponentIds.has(comp.id);
+                    const isHovered = hoveredComponentId === comp.id && activeSidebarTab === "layers" && !isSelected;
                     return (
                       <g key={comp.id}>
                         <rect
@@ -740,23 +936,45 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                           y={t}
                           width={w}
                           height={h}
-                          fill="rgba(245, 158, 11, 0.08)"
-                          stroke="#d97706"
-                          strokeWidth={1.0}
+                          fill={isSelected ? "rgba(2, 132, 199, 0.22)" : isHovered ? "rgba(14, 165, 233, 0.16)" : "rgba(245, 158, 11, 0.08)"}
+                          stroke={isSelected ? "#0284c7" : isHovered ? "#0ea5e9" : "#d97706"}
+                          strokeWidth={isSelected ? 2.5 : isHovered ? 1.8 : 1.0}
                           vectorEffect="non-scaling-stroke"
-                          strokeDasharray="4 3"
+                          strokeDasharray={isSelected ? undefined : "4 3"}
                           rx={Math.max(0.1, 2 * unitScale)}
-                          style={{ pointerEvents: "none" }}
+                          style={{
+                            pointerEvents: activeSidebarTab === "layers" ? "auto" : "none",
+                            cursor: activeSidebarTab === "layers" ? "pointer" : "crosshair",
+                          }}
+                          onPointerEnter={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(comp.id);
+                            }
+                          }}
+                          onPointerLeave={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(null);
+                            }
+                          }}
+                          onClick={(e) => {
+                            if (activeSidebarTab === "layers") {
+                              e.stopPropagation();
+                              setSelectedComponentId(comp.id);
+                            }
+                          }}
                         />
                       </g>
                     );
                   })}
 
                   {/* Images Layer */}
-                  {showImageOverlay && imageComponents.map((comp) => {
+                  {showImageOverlay && !hiddenCategories.images && imageComponents.map((comp) => {
+                    if (hiddenComponentIds.has(comp.id)) return null;
                     const [l, t, r, b] = comp.bbox;
                     const w = r - l;
                     const h = b - t;
+                    const isSelected = selectedComponentId === comp.id && !hiddenComponentIds.has(comp.id);
+                    const isHovered = hoveredComponentId === comp.id && activeSidebarTab === "layers" && !isSelected;
                     return (
                       <g key={comp.id}>
                         <rect
@@ -764,22 +982,44 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                           y={t}
                           width={w}
                           height={h}
-                          fill="rgba(16, 185, 129, 0.09)"
-                          stroke="#059669"
-                          strokeWidth={1.2}
+                          fill={isSelected ? "rgba(2, 132, 199, 0.24)" : isHovered ? "rgba(14, 165, 233, 0.18)" : "rgba(16, 185, 129, 0.09)"}
+                          stroke={isSelected ? "#0284c7" : isHovered ? "#0ea5e9" : "#059669"}
+                          strokeWidth={isSelected ? 2.5 : isHovered ? 1.8 : 1.2}
                           vectorEffect="non-scaling-stroke"
                           rx={Math.max(0.1, 2 * unitScale)}
-                          style={{ pointerEvents: "none" }}
+                          style={{
+                            pointerEvents: activeSidebarTab === "layers" ? "auto" : "none",
+                            cursor: activeSidebarTab === "layers" ? "pointer" : "crosshair",
+                          }}
+                          onPointerEnter={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(comp.id);
+                            }
+                          }}
+                          onPointerLeave={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(null);
+                            }
+                          }}
+                          onClick={(e) => {
+                            if (activeSidebarTab === "layers") {
+                              e.stopPropagation();
+                              setSelectedComponentId(comp.id);
+                            }
+                          }}
                         />
                       </g>
                     );
                   })}
 
                   {/* Text Layer - Thin 1px non-scaling stroke */}
-                  {showTextOverlay && textComponents.map((comp) => {
+                  {showTextOverlay && !hiddenCategories.text && textComponents.map((comp) => {
+                    if (hiddenComponentIds.has(comp.id)) return null;
                     const [l, t, r, b] = comp.bbox;
                     const w = r - l;
                     const h = b - t;
+                    const isSelected = selectedComponentId === comp.id && !hiddenComponentIds.has(comp.id);
+                    const isHovered = hoveredComponentId === comp.id && activeSidebarTab === "layers" && !isSelected;
                     return (
                       <g key={comp.id}>
                         <rect
@@ -787,16 +1027,55 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                           y={t}
                           width={w}
                           height={h}
-                          fill="rgba(59, 130, 246, 0.08)"
-                          stroke="#2563eb"
-                          strokeWidth={1.0}
+                          fill={isSelected ? "rgba(2, 132, 199, 0.24)" : isHovered ? "rgba(14, 165, 233, 0.18)" : "rgba(59, 130, 246, 0.08)"}
+                          stroke={isSelected ? "#0284c7" : isHovered ? "#0ea5e9" : "#2563eb"}
+                          strokeWidth={isSelected ? 2.5 : isHovered ? 1.8 : 1.0}
                           vectorEffect="non-scaling-stroke"
                           rx={Math.max(0.05, 1.5 * unitScale)}
-                          style={{ pointerEvents: "none" }}
+                          style={{
+                            pointerEvents: activeSidebarTab === "layers" ? "auto" : "none",
+                            cursor: activeSidebarTab === "layers" ? "pointer" : "crosshair",
+                          }}
+                          onPointerEnter={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(comp.id);
+                            }
+                          }}
+                          onPointerLeave={() => {
+                            if (activeSidebarTab === "layers") {
+                              setHoveredComponentId(null);
+                            }
+                          }}
+                          onClick={(e) => {
+                            if (activeSidebarTab === "layers") {
+                              e.stopPropagation();
+                              setSelectedComponentId(comp.id);
+                            }
+                          }}
                         />
                       </g>
                     );
                   })}
+
+                  {/* Selected Layer Glowing Ring (In Layer Peeler Mode) */}
+                  {activeSidebarTab === "layers" && selectedComponent && !hiddenComponentIds.has(selectedComponent.id) && (() => {
+                    const [sl, st, sr, sb] = selectedComponent.bbox;
+                    return (
+                      <rect
+                        x={sl}
+                        y={st}
+                        width={sr - sl}
+                        height={sb - st}
+                        fill="rgba(2, 132, 199, 0.22)"
+                        stroke="#0284c7"
+                        strokeWidth={2.5}
+                        vectorEffect="non-scaling-stroke"
+                        strokeDasharray="4 2"
+                        rx={Math.max(0.1, 2.5 * unitScale)}
+                        style={{ pointerEvents: "none" }}
+                      />
+                    );
+                  })()}
 
                   {/* User Marked Image Regions (Purple Gradient & Dynamic Tag) */}
                   {markedRegions.map((region, idx) => {
@@ -812,7 +1091,7 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
 
                     return (
                       <g key={region.id} onClick={(e) => { e.stopPropagation(); setSelectedMarkId(region.id); }}>
-                        {/* Background tint */}
+                        {/* Background tint and drag-to-move body */}
                         <rect
                           x={left}
                           y={top}
@@ -823,34 +1102,49 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                           strokeWidth={isSel ? 2.5 : 1.8}
                           vectorEffect="non-scaling-stroke"
                           rx={Math.max(0.1, 3 * unitScale)}
-                          style={{ pointerEvents: "auto", cursor: "move" }}
+                          style={{ pointerEvents: "auto", cursor: isSel ? "move" : "pointer" }}
+                          onPointerDown={(e) => {
+                            if (isSel) {
+                              startMove(region, e);
+                            } else {
+                              setSelectedMarkId(region.id);
+                            }
+                          }}
                         />
 
-                        {/* Top Badge Tag */}
+                        {/* Top Badge: Marked Image #N */}
                         <rect
                           x={left}
                           y={Math.max(0, top - tagH)}
                           width={tagW}
                           height={tagH}
-                          fill="#7c3aed"
-                          rx={Math.max(0.1, 2.5 * unitScale)}
+                          fill={isSel ? "#6d28d9" : "#7c3aed"}
+                          rx={Math.max(0.1, 2 * unitScale)}
+                          style={{ pointerEvents: "auto", cursor: isSel ? "move" : "pointer" }}
+                          onPointerDown={(e) => {
+                            if (isSel) {
+                              startMove(region, e);
+                            } else {
+                              setSelectedMarkId(region.id);
+                            }
+                          }}
                         />
                         <text
                           x={left + (4 * unitScale)}
-                          y={Math.max(0, top - (5 * unitScale))}
+                          y={Math.max(0, top - (4 * unitScale))}
                           fill="#ffffff"
                           fontSize={tagFont}
                           fontWeight="bold"
                           fontFamily="sans-serif"
-                          style={{ pointerEvents: "none", userSelect: "none" }}
+                          style={{ pointerEvents: "none" }}
                         >
                           ✦ Marked Image #{idx + 1}
                         </text>
 
-                        {/* Delete 'x' Button */}
+                        {/* Delete Button (Circular badge on top right) */}
                         <circle
                           cx={right - delR}
-                          cy={Math.max(delR, top - delR)}
+                          cy={Math.max(delR, top - (delR * 0.5))}
                           r={delR}
                           fill="#ef4444"
                           style={{ pointerEvents: "auto", cursor: "pointer" }}
@@ -858,27 +1152,153 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                         />
                         <text
                           x={right - delR}
-                          y={Math.max(delR, top - (delR * 0.65))}
-                          textAnchor="middle"
+                          y={Math.max(delR, top - (delR * 0.5)) + (delFont * 0.35)}
                           fill="#ffffff"
                           fontSize={delFont}
-                          fontWeight="bold"
+                          fontWeight="900"
+                          textAnchor="middle"
+                          fontFamily="sans-serif"
                           style={{ pointerEvents: "none" }}
                         >
                           ✕
                         </text>
+
+                        {/* 8 Resize Handles (Corner & Edge) when Selected */}
+                        {isSel && (() => {
+                          const handleSize = 6.5 * unitScale;
+                          const handleHalf = handleSize / 2;
+                          const midX = left + (w / 2);
+                          const midY = top + (h / 2);
+
+                          return (
+                            <g>
+                              {/* NW Handle */}
+                              <rect
+                                x={left - handleHalf}
+                                y={top - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "nwse-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "nw", e)}
+                              />
+                              {/* N Handle */}
+                              <rect
+                                x={midX - handleHalf}
+                                y={top - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "ns-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "n", e)}
+                              />
+                              {/* NE Handle */}
+                              <rect
+                                x={right - handleHalf}
+                                y={top - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "nesw-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "ne", e)}
+                              />
+                              {/* E Handle */}
+                              <rect
+                                x={right - handleHalf}
+                                y={midY - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "ew-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "e", e)}
+                              />
+                              {/* SE Handle */}
+                              <rect
+                                x={right - handleHalf}
+                                y={bottom - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "nwse-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "se", e)}
+                              />
+                              {/* S Handle */}
+                              <rect
+                                x={midX - handleHalf}
+                                y={bottom - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "ns-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "s", e)}
+                              />
+                              {/* SW Handle */}
+                              <rect
+                                x={left - handleHalf}
+                                y={bottom - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "nesw-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "sw", e)}
+                              />
+                              {/* W Handle */}
+                              <rect
+                                x={left - handleHalf}
+                                y={midY - handleHalf}
+                                width={handleSize}
+                                height={handleSize}
+                                fill="#ffffff"
+                                stroke="#7c3aed"
+                                strokeWidth={2}
+                                vectorEffect="non-scaling-stroke"
+                                rx={1 * unitScale}
+                                style={{ cursor: "ew-resize", pointerEvents: "auto" }}
+                                onPointerDown={(e) => startResize(region, "w", e)}
+                              />
+                            </g>
+                          );
+                        })()}
                       </g>
                     );
                   })}
 
-                  {/* Active In-Progress Drawing Shape */}
+                  {/* Active Drag Marker preview */}
                   {activeDrawing && (() => {
                     const l = Math.min(activeDrawing.startX, activeDrawing.currentX);
                     const t = Math.min(activeDrawing.startY, activeDrawing.currentY);
-                    const w = Math.abs(activeDrawing.currentX - activeDrawing.startX);
-                    const h = Math.abs(activeDrawing.currentY - activeDrawing.startY);
-                    const tagH = 16 * unitScale;
-                    const tagW = Math.min(w, 110 * unitScale);
+                    const r = Math.max(activeDrawing.startX, activeDrawing.currentX);
+                    const b = Math.max(activeDrawing.startY, activeDrawing.currentY);
+                    const tagH = 18 * unitScale;
+                    const tagW = Math.min(r - l, 100 * unitScale);
                     const tagFont = 9 * unitScale;
 
                     return (
@@ -886,8 +1306,8 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                         <rect
                           x={l}
                           y={t}
-                          width={w}
-                          height={h}
+                          width={r - l}
+                          height={b - t}
                           fill="rgba(124, 58, 237, 0.22)"
                           stroke="#7c3aed"
                           strokeWidth={2}
@@ -922,7 +1342,7 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
             ) : null}
           </div>
 
-          {/* Right Sidebar: Inspection Summary & Marked Region Management (Light Theme) */}
+          {/* Right Sidebar: Inspection Summary, Layer Peeler & Marked Regions */}
           <div style={{
             width: "360px",
             flexShrink: 0,
@@ -933,120 +1353,392 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
             justifyContent: "space-between",
           }}>
             {/* Sidebar Scrollable Body */}
-            <div style={{ padding: "20px", overflowY: "auto", flex: "1 1 auto" }}>
-              {/* Component Stats Card */}
+            <div style={{ padding: "16px 20px", overflowY: "auto", flex: "1 1 auto" }}>
+              {/* Tab Switcher: Marked Regions vs Layer Peeler */}
               <div style={{
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-                borderRadius: "12px",
-                padding: "14px",
-                marginBottom: "18px",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "4px",
+                background: "#f1f5f9",
+                padding: "3px",
+                borderRadius: "9px",
+                marginBottom: "14px",
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                  <Layers size={16} color="#4f46e5" />
-                  <span style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>Detected Elements</span>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
-                  <div style={{ background: "#eff6ff", borderRadius: "8px", padding: "8px 4px", border: "1px solid #bfdbfe" }}>
-                    <div style={{ fontSize: "16px", fontWeight: "700", color: "#1d4ed8" }}>{textComponents.length}</div>
-                    <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Text Spans</div>
-                  </div>
-                  <div style={{ background: "#ecfdf5", borderRadius: "8px", padding: "8px 4px", border: "1px solid #a7f3d0" }}>
-                    <div style={{ fontSize: "16px", fontWeight: "700", color: "#047857" }}>{imageComponents.length}</div>
-                    <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Images</div>
-                  </div>
-                  <div style={{ background: "#fffbeb", borderRadius: "8px", padding: "8px 4px", border: "1px solid #fde68a" }}>
-                    <div style={{ fontSize: "16px", fontWeight: "700", color: "#b45309" }}>{pathComponents.length}</div>
-                    <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Shapes</div>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSidebarTab("marked")}
+                  style={{
+                    padding: "7px 10px",
+                    borderRadius: "7px",
+                    fontSize: "12px",
+                    fontWeight: activeSidebarTab === "marked" ? "700" : "600",
+                    background: activeSidebarTab === "marked" ? "#ffffff" : "transparent",
+                    color: activeSidebarTab === "marked" ? "#7c3aed" : "#64748b",
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: activeSidebarTab === "marked" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                    transition: "all 0.15s ease",
+                    whiteSpace: "nowrap",
+                    textAlign: "center",
+                  }}
+                >
+                  Marked Areas ({markedRegions.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSidebarTab("layers")}
+                  style={{
+                    padding: "7px 10px",
+                    borderRadius: "7px",
+                    fontSize: "12px",
+                    fontWeight: activeSidebarTab === "layers" ? "700" : "600",
+                    background: activeSidebarTab === "layers" ? "#ffffff" : "transparent",
+                    color: activeSidebarTab === "layers" ? "#7c3aed" : "#64748b",
+                    border: "none",
+                    cursor: "pointer",
+                    boxShadow: activeSidebarTab === "layers" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                    transition: "all 0.15s ease",
+                    whiteSpace: "nowrap",
+                    textAlign: "center",
+                  }}
+                >
+                  Layer Peeler{hiddenComponentIds.size > 0 ? ` (${hiddenComponentIds.size})` : ""}
+                </button>
               </div>
 
-              {/* Marked Sections List */}
-              <div style={{ marginBottom: "14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                    Marked Image Sections ({markedRegions.length})
-                  </span>
-                </div>
-                {markedRegions.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleClearAll}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: "#ef4444",
-                      fontSize: "11px",
-                      fontWeight: "700",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Clear All
-                  </button>
-                )}
-              </div>
-
-              {markedRegions.length === 0 ? (
-                <div style={{
-                  padding: "24px 16px",
-                  borderRadius: "10px",
-                  border: "1.5px dashed #cbd5e1",
-                  background: "#f8fafc",
-                  textAlign: "center",
-                  color: "#64748b",
-                  fontSize: "12px",
-                }}>
-                  <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#f5f3ff", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}>
-                    <Crop size={18} />
+              {activeSidebarTab === "marked" ? (
+                <>
+                  {/* Component Stats Card */}
+                  <div style={{
+                    background: "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "12px",
+                    padding: "12px",
+                    marginBottom: "16px",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                      <Layers size={15} color="#4f46e5" />
+                      <span style={{ fontSize: "12.5px", fontWeight: "700", color: "#0f172a" }}>Detected Elements</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
+                      <div style={{ background: "#eff6ff", borderRadius: "8px", padding: "6px 4px", border: "1px solid #bfdbfe" }}>
+                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#1d4ed8" }}>{textComponents.length}</div>
+                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Text Spans</div>
+                      </div>
+                      <div style={{ background: "#ecfdf5", borderRadius: "8px", padding: "6px 4px", border: "1px solid #a7f3d0" }}>
+                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#047857" }}>{imageComponents.length}</div>
+                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Images</div>
+                      </div>
+                      <div style={{ background: "#fffbeb", borderRadius: "8px", padding: "6px 4px", border: "1px solid #fde68a" }}>
+                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#b45309" }}>{pathComponents.length}</div>
+                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Shapes</div>
+                      </div>
+                    </div>
                   </div>
-                  <p style={{ margin: "0 0 4px 0", color: "#0f172a", fontWeight: "700" }}>No sections marked</p>
-                  <span style={{ fontSize: "11.5px", lineHeight: "1.45", color: "#64748b" }}>
-                    Drag on the document canvas to mark complex areas (badges, hero banners, artwork with text).
-                  </span>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                  {markedRegions.map((region, i) => {
-                    const isSel = selectedMarkId === region.id;
-                    const w = Math.round(region.right - region.left);
-                    const h = Math.round(region.bottom - region.top);
 
-                    return (
-                      <div
-                        key={region.id}
-                        onClick={() => setSelectedMarkId(region.id)}
+                  {/* Marked Sections Header */}
+                  <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: "12.5px", fontWeight: "700", color: "#0f172a" }}>
+                      Marked Image Sections ({markedRegions.length})
+                    </span>
+                    {markedRegions.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearAll}
                         style={{
-                          background: isSel ? "#f5f3ff" : "#f8fafc",
-                          border: isSel ? "1.5px solid #7c3aed" : "1px solid #e2e8f0",
-                          borderRadius: "10px",
-                          padding: "10px 12px",
+                          background: "transparent",
+                          border: "none",
+                          color: "#ef4444",
+                          fontSize: "11px",
+                          fontWeight: "700",
                           cursor: "pointer",
-                          transition: "all 0.15s ease",
-                          boxShadow: isSel ? "0 2px 8px rgba(124, 58, 237, 0.15)" : "none",
                         }}
                       >
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
-                          <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
-                            Marked Section #{i + 1}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteMark(region.id, e)}
-                            style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", padding: "2px" }}
-                            title="Delete marked area"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#64748b" }}>
-                          <span>Size: {w} × {h} pt</span>
-                          <span>•</span>
-                          <span style={{ color: "#7c3aed", fontWeight: "700" }}>Transparent PNG</span>
-                        </div>
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+
+                  {markedRegions.length === 0 ? (
+                    <div style={{
+                      padding: "24px 16px",
+                      borderRadius: "10px",
+                      border: "1.5px dashed #cbd5e1",
+                      background: "#f8fafc",
+                      textAlign: "center",
+                      color: "#64748b",
+                      fontSize: "12px",
+                    }}>
+                      <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#f5f3ff", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}>
+                        <Crop size={18} />
                       </div>
-                    );
-                  })}
+                      <p style={{ margin: "0 0 4px 0", color: "#0f172a", fontWeight: "700" }}>No sections marked</p>
+                      <span style={{ fontSize: "11.5px", lineHeight: "1.45", color: "#64748b" }}>
+                        Drag on the document canvas to mark complex areas (badges, hero banners, artwork with text).
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      {markedRegions.map((region, i) => {
+                        const isSel = selectedMarkId === region.id;
+                        const w = Math.round(region.right - region.left);
+                        const h = Math.round(region.bottom - region.top);
+
+                        return (
+                          <div
+                            key={region.id}
+                            onClick={() => setSelectedMarkId(region.id)}
+                            style={{
+                              background: isSel ? "#f5f3ff" : "#f8fafc",
+                              border: isSel ? "1.5px solid #7c3aed" : "1px solid #e2e8f0",
+                              borderRadius: "10px",
+                              padding: "10px 12px",
+                              cursor: "pointer",
+                              transition: "all 0.15s ease",
+                              boxShadow: isSel ? "0 2px 8px rgba(124, 58, 237, 0.15)" : "none",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                              <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
+                                Marked Section #{i + 1}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => handleDeleteMark(region.id, e)}
+                                style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", padding: "2px" }}
+                                title="Delete marked area"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#64748b" }}>
+                              <span>Size: {w} × {h} pt</span>
+                              <span>•</span>
+                              <span style={{ color: "#7c3aed", fontWeight: "700" }}>Transparent PNG</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* Layer Peeler Tab */
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div style={{
+                    background: "#f0fdf4",
+                    border: "1px solid #bbf7d0",
+                    borderRadius: "8px",
+                    padding: "9px 11px",
+                    fontSize: "11px",
+                    color: "#166534",
+                    lineHeight: "1.4",
+                  }}>
+                    Hover & click any layer on the PDF to <strong>select</strong> or <strong>peel/hide</strong> it.
+                  </div>
+
+                  {/* 1. Selected Layer Card */}
+                  {selectedComponent && !hiddenComponentIds.has(selectedComponent.id) && (
+                    <div style={{
+                      background: "#f0f9ff",
+                      border: "1.5px solid #0284c7",
+                      borderRadius: "10px",
+                      padding: "12px",
+                      boxShadow: "0 2px 8px rgba(2, 132, 199, 0.15)",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{
+                            fontSize: "9px",
+                            fontWeight: "700",
+                            textTransform: "uppercase",
+                            padding: "2px 5px",
+                            borderRadius: "4px",
+                            background: "#0284c7",
+                            color: "#ffffff",
+                          }}>
+                            {selectedComponent.type}
+                          </span>
+                          <span style={{ fontSize: "12px", fontWeight: "700", color: "#0369a1" }}>
+                            Selected on PDF
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedComponentId(null)}
+                          style={{ background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "13px", fontWeight: "700" }}
+                          title="Deselect"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#334155", marginBottom: "10px", fontWeight: "500", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {selectedComponent.type === "text" ? (selectedComponent.text_content || "Text span") :
+                         selectedComponent.type === "image" ? `Image (${selectedComponent.image_width || Math.round(selectedComponent.bbox[2]-selectedComponent.bbox[0])}×${selectedComponent.image_height || Math.round(selectedComponent.bbox[3]-selectedComponent.bbox[1])}px)` :
+                         `Shape / Card (${Math.round(selectedComponent.bbox[2]-selectedComponent.bbox[0])}×${Math.round(selectedComponent.bbox[3]-selectedComponent.bbox[1])}pt)`}
+                      </div>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleComponentClick(selectedComponent, { stopPropagation: () => {} } as any)}
+                          style={{
+                            flex: 1,
+                            padding: "7px 10px",
+                            borderRadius: "7px",
+                            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                            color: "#ffffff",
+                            border: "none",
+                            fontSize: "11.5px",
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            boxShadow: "0 2px 6px rgba(124, 58, 237, 0.25)",
+                          }}
+                        >
+                          ✦ Mark as Image
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => toggleComponentVisibility(selectedComponent.id, e)}
+                          style={{
+                            padding: "7px 12px",
+                            borderRadius: "7px",
+                            background: "#fee2e2",
+                            color: "#ef4444",
+                            border: "1px solid #fecaca",
+                            fontSize: "11.5px",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Hide / Peel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 2. Hidden / Peeled Layers Section */}
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                      <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
+                        Peeled / Hidden Layers ({hiddenComponentIds.size})
+                      </span>
+                      {hiddenComponentIds.size > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setHiddenComponentIds(new Set())}
+                          style={{
+                            background: "#f1f5f9",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: "6px",
+                            padding: "3px 8px",
+                            fontSize: "10.5px",
+                            fontWeight: "700",
+                            color: "#475569",
+                            cursor: "pointer",
+                          }}
+                        >
+                          ↺ Restore All
+                        </button>
+                      )}
+                    </div>
+
+                    {hiddenComponentIds.size === 0 ? (
+                      <div style={{
+                        padding: "20px 14px",
+                        borderRadius: "8px",
+                        border: "1.5px dashed #cbd5e1",
+                        background: "#f8fafc",
+                        textAlign: "center",
+                        color: "#64748b",
+                        fontSize: "11.5px",
+                      }}>
+                        <p style={{ margin: "0 0 4px 0", color: "#0f172a", fontWeight: "700" }}>No layers peeled yet</p>
+                        <span>Click any layer on the PDF canvas to select it, then click "Hide / Peel" to uncover layers beneath.</span>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "360px", overflowY: "auto" }}>
+                        {pageData?.components.filter(c => hiddenComponentIds.has(c.id)).map((comp) => {
+                          const [l, t, r, b] = comp.bbox;
+                          const w = Math.round(r - l);
+                          const h = Math.round(b - t);
+
+                          return (
+                            <div
+                              key={comp.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                padding: "8px 10px",
+                                borderRadius: "8px",
+                                background: "#f8fafc",
+                                border: "1px dashed #cbd5e1",
+                                opacity: 0.85,
+                                transition: "all 0.15s ease",
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: "1 1 auto" }}>
+                                <span style={{
+                                  fontSize: "9px",
+                                  fontWeight: "700",
+                                  textTransform: "uppercase",
+                                  padding: "2px 5px",
+                                  borderRadius: "4px",
+                                  background: comp.type === "text" ? "#eff6ff" : comp.type === "image" ? "#ecfdf5" : "#fffbeb",
+                                  color: comp.type === "text" ? "#1d4ed8" : comp.type === "image" ? "#047857" : "#b45309",
+                                  border: `1px solid ${comp.type === "text" ? "#bfdbfe" : comp.type === "image" ? "#a7f3d0" : "#fde68a"}`,
+                                  flexShrink: 0,
+                                }}>
+                                  {comp.type}
+                                </span>
+                                <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+                                  <div style={{
+                                    fontSize: "11px",
+                                    fontWeight: "600",
+                                    color: "#64748b",
+                                    textDecoration: "line-through",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}>
+                                    {comp.type === "text" ? (comp.text_content || "Text span") :
+                                     comp.type === "image" ? `Image (${comp.image_width || w}×${comp.image_height || h}px)` :
+                                     `Shape / Card (${w}×${h}pt)`}
+                                  </div>
+                                  <span style={{ fontSize: "10px", color: "#94a3b8" }}>
+                                    {w}×{h}pt at ({Math.round(l)}, {Math.round(t)})
+                                  </span>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={(e) => toggleComponentVisibility(comp.id, e)}
+                                style={{
+                                  background: "#f0fdf4",
+                                  border: "1px solid #bbf7d0",
+                                  color: "#16a34a",
+                                  borderRadius: "6px",
+                                  padding: "4px 8px",
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  fontSize: "10.5px",
+                                  fontWeight: "700",
+                                  flexShrink: 0,
+                                }}
+                                title="Restore/unhide this layer"
+                              >
+                                <Eye size={12} />
+                                <span>Unhide</span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

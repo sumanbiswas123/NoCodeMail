@@ -575,6 +575,10 @@ pub fn extractPdfPackageNative(
         if (pt_width <= 0) pt_width = 600.0;
         if (pt_height <= 0) pt_height = 800.0;
 
+        const norm_scale: f64 = @as(f64, @floatFromInt(target_email_width)) / pt_width;
+        const norm_canvas_w: f64 = @as(f64, @floatFromInt(target_email_width));
+        const norm_canvas_h: f64 = pt_height * norm_scale;
+
         const render_w: c_int = @intCast(@as(i64, @intFromFloat(@as(f64, @floatFromInt(target_email_width)) * 1.5)));
         const render_h_f = (pt_height / pt_width) * @as(f64, @floatFromInt(render_w));
         const render_h: c_int = if (render_h_f > 0) @intCast(@as(i64, @intFromFloat(render_h_f))) else render_w;
@@ -650,7 +654,7 @@ pub fn extractPdfPackageNative(
             \\      "preview_pixel_height": {d},
             \\      "elements": [
             \\
-        , .{ p + 1, pt_width, pt_height, std.json.fmt(preview_filename, .{}), render_w, render_h });
+        , .{ p + 1, norm_canvas_w, norm_canvas_h, std.json.fmt(preview_filename, .{}), render_w, render_h });
 
         // Intermediate element representation for natural top-to-bottom sorting
         const ElementType = enum {
@@ -749,10 +753,10 @@ pub fn extractPdfPackageNative(
 
                     try page_elements.append(allocator, ElementItem{
                         .elem_type = .image,
-                        .top = mark_t,
-                        .left = mark_l,
-                        .width = mark_w_pt,
-                        .height = mark_h_pt,
+                        .top = mark_t * norm_scale,
+                        .left = mark_l * norm_scale,
+                        .width = mark_w_pt * norm_scale,
+                        .height = mark_h_pt * norm_scale,
                         .asset_rel_path = asset_rel_path,
                         .img_width_px = email_w_px,
                         .img_height_px = email_h_px,
@@ -870,10 +874,10 @@ pub fn extractPdfPackageNative(
 
                 try page_elements.append(allocator, ElementItem{
                     .elem_type = .image,
-                    .top = top_pt,
-                    .left = left_pt,
-                    .width = w_val,
-                    .height = h_val,
+                    .top = top_pt * norm_scale,
+                    .left = left_pt * norm_scale,
+                    .width = w_val * norm_scale,
+                    .height = h_val * norm_scale,
                     .asset_rel_path = asset_rel_path,
                     .img_width_px = email_w_px,
                     .img_height_px = email_h_px,
@@ -920,10 +924,10 @@ pub fn extractPdfPackageNative(
                                     const lk_y1 = @as(f64, @max(pt_height - rect.top, pt_height - rect.bottom));
 
                                     try page_links.append(allocator, .{
-                                        .left = lk_x0,
-                                        .top = lk_y0,
-                                        .right = lk_x1,
-                                        .bottom = lk_y1,
+                                        .left = lk_x0 * norm_scale,
+                                        .top = lk_y0 * norm_scale,
+                                        .right = lk_x1 * norm_scale,
+                                        .bottom = lk_y1 * norm_scale,
                                         .uri = try allocator.dupe(u8, uri_str),
                                     });
                                 }
@@ -1021,21 +1025,24 @@ pub fn extractPdfPackageNative(
                         if (card_w_px >= @as(c_int, @intCast(@as(i64, @intFromFloat(@as(f64, @floatFromInt(render_w)) * 0.95)))) and
                             card_h_px >= @as(c_int, @intCast(@as(i64, @intFromFloat(@as(f64, @floatFromInt(render_h)) * 0.95))))) continue;
 
+                        const card_left_pt = (@as(f64, @floatFromInt(min_x)) / scale_x) * norm_scale;
+                        const card_top_pt = (@as(f64, @floatFromInt(min_y)) / scale_y) * norm_scale;
+                        const card_right_pt = (@as(f64, @floatFromInt(max_x)) / scale_x) * norm_scale;
+                        const card_bottom_pt = (@as(f64, @floatFromInt(max_y)) / scale_y) * norm_scale;
+
                         var r_val: c_uint = 255;
                         var g_val: c_uint = 255;
                         var b_val: c_uint = 255;
                         var a_val: c_uint = 255;
                         if (FPDFPageObj_GetFillColor(path_obj, &r_val, &g_val, &b_val, &a_val) != 0 and a_val > 0) {
-                            if (!(r_val == 255 and g_val == 255 and b_val == 255)) {
-                                const fill_hex = try std.fmt.allocPrint(allocator, "#{x:0>2}{x:0>2}{x:0>2}", .{ r_val, g_val, b_val });
-                                try bg_cards.append(allocator, .{
-                                    .left = @as(f64, @floatFromInt(min_x)) / scale_x,
-                                    .top = @as(f64, @floatFromInt(min_y)) / scale_y,
-                                    .right = @as(f64, @floatFromInt(max_x)) / scale_x,
-                                    .bottom = @as(f64, @floatFromInt(max_y)) / scale_y,
-                                    .fill_hex = fill_hex,
-                                });
-                            }
+                            const fill_hex = try std.fmt.allocPrint(allocator, "#{x:0>2}{x:0>2}{x:0>2}", .{ r_val, g_val, b_val });
+                            try bg_cards.append(allocator, .{
+                                .left = card_left_pt,
+                                .top = card_top_pt,
+                                .right = card_right_pt,
+                                .bottom = card_bottom_pt,
+                                .fill_hex = fill_hex,
+                            });
                         }
                     }
                 }
@@ -1105,6 +1112,7 @@ pub fn extractPdfPackageNative(
                                 const center_y = (ry0 + ry1) * 0.5;
                                 var font_size: f64 = 10.5;
                                 var is_bold: bool = false;
+                                var is_italic: bool = false;
                                 var r_val: c_uint = 21;
                                 var g_val: c_uint = 21;
                                 var b_val: c_uint = 21;
@@ -1119,33 +1127,58 @@ pub fn extractPdfPackageNative(
                                     const font_name_len = FPDFText_GetFontInfo(tp, char_i, &font_name_buf, font_name_buf.len, &font_flags);
                                     if (font_name_len > 0) {
                                         const font_slice = font_name_buf[0..@min(font_name_len, font_name_buf.len)];
-                                        for (font_slice) |c| {
-                                            if (c == 'B' or c == 'b') {
-                                                if (std.ascii.indexOfIgnoreCase(font_slice, "bold") != null or std.ascii.indexOfIgnoreCase(font_slice, "black") != null or std.ascii.indexOfIgnoreCase(font_slice, "heavy") != null) {
-                                                    is_bold = true;
-                                                    break;
-                                                }
-                                            }
+                                        if (std.ascii.indexOfIgnoreCase(font_slice, "bold") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "black") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "heavy") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "semibold") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "demi") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "w6") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "w7") != null) {
+                                            is_bold = true;
+                                        }
+                                        if (std.ascii.indexOfIgnoreCase(font_slice, "italic") != null or
+                                            std.ascii.indexOfIgnoreCase(font_slice, "oblique") != null) {
+                                            is_italic = true;
                                         }
                                         if ((font_flags & 0x40000) != 0 or (font_flags & 16) != 0) {
                                             is_bold = true;
                                         }
+                                        if ((font_flags & 0x40) != 0) {
+                                            is_italic = true;
+                                        }
                                     }
 
                                     const fw = FPDFText_GetFontWeight(tp, char_i);
-                                    if (fw >= 700) is_bold = true;
+                                    if (fw >= 600) is_bold = true;
 
                                     var a_val: c_uint = 21;
                                     _ = FPDFText_GetFillColor(tp, char_i, &r_val, &g_val, &b_val, &a_val);
                                 }
 
-                                const hex_color = try std.fmt.allocPrint(allocator, "#{x:0>2}{x:0>2}{x:0>2}", .{ r_val, g_val, b_val });
                                 const y_a = pt_height - ry0;
                                 const y_b = pt_height - ry1;
                                 const top_y = @min(y_a, y_b);
                                 const bottom_y = @max(y_a, y_b);
                                 const width = rx1 - rx0;
                                 const height = bottom_y - top_y;
+
+                                // STRICT TEXT SUPPRESSION: Exclude text if inside any user-marked image region on this page
+                                if (isInsideAnyMarkedRegion(rx0, top_y, rx1, bottom_y, active_marked_regions, p + 1)) {
+                                    continue;
+                                }
+
+                                // Normalize coordinates to email space
+                                const norm_top_y = top_y * norm_scale;
+                                const norm_left = rx0 * norm_scale;
+                                const norm_width = width * norm_scale;
+                                const norm_height = height * norm_scale;
+
+                                // If font_size is unscaled (e.g. 1.0pt from InDesign transform matrix), calculate real point size from rendered bounding box height
+                                var norm_font_size = font_size * norm_scale;
+                                if (norm_font_size <= 2.5 and norm_height >= 4.0) {
+                                    norm_font_size = norm_height * 0.92;
+                                }
+                                norm_font_size = @round(norm_font_size * 10.0) / 10.0;
 
                                 const is_super = trimmed.len <= 4 and (
                                     std.mem.eql(u8, trimmed, "1") or std.mem.eql(u8, trimmed, "2") or
@@ -1155,30 +1188,26 @@ pub fn extractPdfPackageNative(
                                     std.mem.eql(u8, trimmed, "2,3")
                                 );
 
-                                // STRICT TEXT SUPPRESSION: Exclude text if inside any user-marked image region on this page
-                                if (isInsideAnyMarkedRegion(rx0, top_y, rx1, bottom_y, active_marked_regions, p + 1)) {
-                                    allocator.free(hex_color);
-                                    continue;
-                                }
+                                const hex_color = try std.fmt.allocPrint(allocator, "#{x:0>2}{x:0>2}{x:0>2}", .{ r_val, g_val, b_val });
 
                                 var span_link: ?[]const u8 = null;
                                 for (page_links.items) |lk| {
-                                    if (!(rx0 > lk.right or rx1 < lk.left or top_y > lk.bottom or bottom_y < lk.top)) {
+                                    if (!(norm_left > lk.right or norm_left + norm_width < lk.left or norm_top_y > lk.bottom or norm_top_y + norm_height < lk.top)) {
                                         span_link = lk.uri;
                                         break;
                                     }
                                 }
 
                                 try raw_spans.append(allocator, .{
-                                    .top = top_y,
-                                    .left = rx0,
-                                    .width = width,
-                                    .height = height,
+                                    .top = norm_top_y,
+                                    .left = norm_left,
+                                    .width = norm_width,
+                                    .height = norm_height,
                                     .text = try allocator.dupe(u8, trimmed),
-                                    .font_size = font_size,
+                                    .font_size = norm_font_size,
                                     .color = hex_color,
                                     .bold = is_bold,
-                                    .italic = false,
+                                    .italic = is_italic,
                                     .superscript = is_super,
                                     .hyperlink = span_link,
                                 });
@@ -1194,7 +1223,7 @@ pub fn extractPdfPackageNative(
         // Sort raw spans top-to-bottom, left-to-right
         const SpanSort = struct {
             pub fn lessThan(_: @TypeOf(.{}), a: TextSpanRaw, b: TextSpanRaw) bool {
-                if (@abs(a.top - b.top) > 3.0) return a.top < b.top;
+                if (@abs(a.top - b.top) > 5.0) return a.top < b.top;
                 return a.left < b.left;
             }
         };
@@ -1209,6 +1238,7 @@ pub fn extractPdfPackageNative(
             italic: bool,
             superscript: bool,
             hyperlink: ?[]const u8,
+            left: f64,
         };
 
         const LineInfo = struct {
@@ -1223,6 +1253,7 @@ pub fn extractPdfPackageNative(
             raw_text: []const u8,
             lines: std.ArrayList(LineInfo),
             parent_container_color: ?[]const u8,
+            container_type: ?[]const u8 = null,
             is_cta_button: bool,
             dominant_color: []const u8,
         };
@@ -1247,8 +1278,6 @@ pub fn extractPdfPackageNative(
             const dom_col = start_span.color;
 
             var b_lines = std.ArrayList(LineInfo).empty;
-            var raw_text_buf = std.ArrayList(u8).empty;
-            defer raw_text_buf.deinit(allocator);
 
             var cur_line_spans = std.ArrayList(SpanInfo).empty;
             var cur_line_l = start_span.left;
@@ -1264,15 +1293,15 @@ pub fn extractPdfPackageNative(
                 .italic = start_span.italic,
                 .superscript = start_span.superscript,
                 .hyperlink = start_span.hyperlink,
+                .left = start_span.left,
             });
-            try raw_text_buf.appendSlice(allocator, start_span.text);
 
             var next_idx = span_idx + 1;
             while (next_idx < raw_spans.items.len) {
                 const cand = raw_spans.items[next_idx];
                 const v_gap = cand.top - cur_line_b;
-                const is_same_line = @abs(cand.top - cur_line_t) <= 6.0 and (cand.left - cur_line_r) <= 45.0;
-                const is_next_line_para = v_gap >= -4.0 and v_gap <= (start_span.font_size * 2.2) and @abs(cand.left - block_l) <= 25.0 and (@abs(cand.font_size - start_span.font_size) <= 3.5 or cand.superscript or cand.text.len <= 2);
+                const is_same_line = @abs(cand.top - cur_line_t) <= 6.5 or @abs(cand.top + cand.height - cur_line_b) <= 5.0;
+                const is_next_line_para = v_gap >= -4.0 and v_gap <= (start_span.font_size * 2.2) and @abs(cand.left - block_l) <= 30.0 and (@abs(cand.font_size - start_span.font_size) <= 4.0 or cand.superscript or cand.text.len <= 2);
 
                 if (is_same_line) {
                     try cur_line_spans.append(allocator, .{
@@ -1283,15 +1312,24 @@ pub fn extractPdfPackageNative(
                         .italic = cand.italic,
                         .superscript = cand.superscript,
                         .hyperlink = cand.hyperlink,
+                        .left = cand.left,
                     });
+                    cur_line_l = @min(cur_line_l, cand.left);
                     cur_line_r = @max(cur_line_r, cand.left + cand.width);
                     cur_line_b = @max(cur_line_b, cand.top + cand.height);
+                    block_l = @min(block_l, cur_line_l);
                     block_r = @max(block_r, cur_line_r);
                     block_b = @max(block_b, cur_line_b);
-                    try raw_text_buf.append(allocator, ' ');
-                    try raw_text_buf.appendSlice(allocator, cand.text);
                     next_idx += 1;
                 } else if (is_next_line_para) {
+                    // Sort spans on current line left to right before finalizing line
+                    const LineSpanSort = struct {
+                        pub fn lessThan(_: @TypeOf(.{}), sa: SpanInfo, sb: SpanInfo) bool {
+                            return sa.left < sb.left;
+                        }
+                    };
+                    std.mem.sort(SpanInfo, cur_line_spans.items, .{}, LineSpanSort.lessThan);
+
                     try b_lines.append(allocator, .{
                         .bbox = [4]f64{ cur_line_l, cur_line_t, cur_line_r, cur_line_b },
                         .spans = cur_line_spans,
@@ -1313,26 +1351,57 @@ pub fn extractPdfPackageNative(
                         .italic = cand.italic,
                         .superscript = cand.superscript,
                         .hyperlink = cand.hyperlink,
+                        .left = cand.left,
                     });
-                    try raw_text_buf.append(allocator, ' ');
-                    try raw_text_buf.appendSlice(allocator, cand.text);
                     next_idx += 1;
                 } else {
                     break;
                 }
             }
 
+            // Finalize last line with left-to-right sorted spans
+            const LineSpanSort = struct {
+                pub fn lessThan(_: @TypeOf(.{}), sa: SpanInfo, sb: SpanInfo) bool {
+                    return sa.left < sb.left;
+                }
+            };
+            std.mem.sort(SpanInfo, cur_line_spans.items, .{}, LineSpanSort.lessThan);
+
             try b_lines.append(allocator, .{
                 .bbox = [4]f64{ cur_line_l, cur_line_t, cur_line_r, cur_line_b },
                 .spans = cur_line_spans,
             });
 
-            // Container card containment check
+            // Assemble natural raw_text from sorted spans
+            var raw_text_buf = std.ArrayList(u8).empty;
+            defer raw_text_buf.deinit(allocator);
+
+            for (b_lines.items, 0..) |line, li| {
+                if (li > 0) try raw_text_buf.append(allocator, ' ');
+                for (line.spans.items, 0..) |sp, si| {
+                    if (si > 0) try raw_text_buf.append(allocator, ' ');
+                    try raw_text_buf.appendSlice(allocator, sp.text);
+                }
+            }
+
+            // Container card containment check (tightest enclosing container with area >= 200pt^2)
             var cont_col: ?[]const u8 = null;
+            var cont_type: ?[]const u8 = null;
+            var best_carea: f64 = 1e12;
             for (bg_cards.items) |card| {
-                if (card.left - 5.0 <= block_l and card.right + 5.0 >= block_r and card.top - 5.0 <= block_t and card.bottom + 5.0 >= block_b) {
-                    cont_col = card.fill_hex;
-                    break;
+                const cw = card.right - card.left;
+                const ch = card.bottom - card.top;
+                const carea = cw * ch;
+                if (carea >= 200.0 and carea < best_carea) {
+                    if (card.left - 6.0 <= block_l and card.right + 6.0 >= block_r and card.top - 6.0 <= block_t and card.bottom + 6.0 >= block_b) {
+                        best_carea = carea;
+                        cont_col = card.fill_hex;
+                        if (cw >= (norm_canvas_w * 0.85)) {
+                            cont_type = "full_width_section";
+                        } else {
+                            cont_type = "inner_card";
+                        }
+                    }
                 }
             }
 
@@ -1341,6 +1410,7 @@ pub fn extractPdfPackageNative(
                 std.mem.indexOf(u8, raw_str, "Click") != null or
                 std.mem.indexOf(u8, raw_str, "Clique") != null or
                 std.mem.indexOf(u8, raw_str, "Acesse") != null or
+                std.mem.indexOf(u8, raw_str, "Saiba mais") != null or
                 std.mem.indexOf(u8, raw_str, "Learn more") != null) and raw_str.len <= 45;
 
             try clustered_blocks.append(allocator, .{
@@ -1350,6 +1420,7 @@ pub fn extractPdfPackageNative(
                 .raw_text = raw_str,
                 .lines = b_lines,
                 .parent_container_color = cont_col,
+                .container_type = cont_type,
                 .is_cta_button = is_cta,
                 .dominant_color = dom_col,
             });
@@ -1374,6 +1445,7 @@ pub fn extractPdfPackageNative(
             img_width_px: i32 = 0,
             img_height_px: i32 = 0,
             hyperlink: ?[]const u8 = null,
+            parent_container_color: ?[]const u8 = null,
             // Text Block fields
             block_info: ?BlockInfo = null,
         };
@@ -1383,6 +1455,27 @@ pub fn extractPdfPackageNative(
 
         for (page_elements.items) |elem| {
             if (elem.elem_type == .image) {
+                var img_cont_col: ?[]const u8 = null;
+                const is_custom_mark = if (elem.asset_rel_path) |p_path| std.mem.indexOf(u8, p_path, "_mark_") != null else false;
+                const is_large_section_img = elem.width >= 450.0 or (elem.width * elem.height) >= 40000.0;
+
+                // Only search for parent container color if it's a small child asset (e.g. logo, icon) inside a larger container card
+                if (!is_custom_mark and !is_large_section_img) {
+                    var best_img_carea: f64 = 1e12;
+                    for (bg_cards.items) |card| {
+                        const cw = card.right - card.left;
+                        const ch = card.bottom - card.top;
+                        const carea = cw * ch;
+                        const elem_area = elem.width * elem.height;
+                        if (carea >= elem_area * 1.5 and carea < best_img_carea) {
+                            if (card.left - 6.0 <= elem.left and card.right + 6.0 >= (elem.left + elem.width) and card.top - 6.0 <= elem.top and card.bottom + 6.0 >= (elem.top + elem.height)) {
+                                best_img_carea = carea;
+                                img_cont_col = card.fill_hex;
+                            }
+                        }
+                    }
+                }
+
                 try all_elements.append(allocator, .{
                     .elem_type = .image,
                     .top = elem.top,
@@ -1393,6 +1486,7 @@ pub fn extractPdfPackageNative(
                     .img_width_px = elem.img_width_px,
                     .img_height_px = elem.img_height_px,
                     .hyperlink = elem.hyperlink,
+                    .parent_container_color = img_cont_col,
                 });
             }
         }
@@ -1424,33 +1518,31 @@ pub fn extractPdfPackageNative(
             first_elem = false;
 
             if (elem.elem_type == .image) {
-                if (elem.hyperlink) |link_url| {
-                    try json_buf.print(
-                        \\        {{
-                        \\          "type": "image",
-                        \\          "bbox": [{d:.1}, {d:.1}, {d:.1}, {d:.1}],
-                        \\          "top": {d:.1},
-                        \\          "left": {d:.1},
-                        \\          "asset_path": {f},
-                        \\          "width_px": {d},
-                        \\          "height_px": {d},
-                        \\          "hyperlink": {f}
-                        \\        }}
-                    , .{ elem.left, elem.top, elem.left + elem.width, elem.top + elem.height, elem.top, elem.left, std.json.fmt(elem.asset_rel_path.?, .{}), elem.img_width_px, elem.img_height_px, std.json.fmt(link_url, .{}) });
-                } else {
-                    try json_buf.print(
-                        \\        {{
-                        \\          "type": "image",
-                        \\          "bbox": [{d:.1}, {d:.1}, {d:.1}, {d:.1}],
-                        \\          "top": {d:.1},
-                        \\          "left": {d:.1},
-                        \\          "asset_path": {f},
-                        \\          "width_px": {d},
-                        \\          "height_px": {d},
-                        \\          "hyperlink": null
-                        \\        }}
-                    , .{ elem.left, elem.top, elem.left + elem.width, elem.top + elem.height, elem.top, elem.left, std.json.fmt(elem.asset_rel_path.?, .{}), elem.img_width_px, elem.img_height_px });
-                }
+                try json_buf.print(
+                    \\        {{
+                    \\          "type": "image",
+                    \\          "bbox": [{d:.1}, {d:.1}, {d:.1}, {d:.1}],
+                    \\          "top": {d:.1},
+                    \\          "left": {d:.1},
+                    \\          "asset_path": {f},
+                    \\          "width_px": {d},
+                    \\          "height_px": {d},
+                    \\          "hyperlink": {s},
+                    \\          "parent_container_color": {s}
+                    \\        }}
+                , .{
+                    elem.left,
+                    elem.top,
+                    elem.left + elem.width,
+                    elem.top + elem.height,
+                    elem.top,
+                    elem.left,
+                    std.json.fmt(elem.asset_rel_path.?, .{}),
+                    elem.img_width_px,
+                    elem.img_height_px,
+                    if (elem.hyperlink) |h| try std.fmt.allocPrint(allocator, "\"{s}\"", .{h}) else "null",
+                    if (elem.parent_container_color) |c| try std.fmt.allocPrint(allocator, "\"{s}\"", .{c}) else "null",
+                });
             } else if (elem.block_info) |b| {
                 total_text_blocks_count += 1;
 
@@ -1512,11 +1604,13 @@ pub fn extractPdfPackageNative(
                     \\
                     \\          ],
                     \\          "parent_container_color": {s},
+                    \\          "container_type": {s},
                     \\          "is_cta_button": {s},
                     \\          "dominant_color": {f}
                     \\        }}
                 , .{
                     if (b.parent_container_color) |c| try std.fmt.allocPrint(allocator, "\"{s}\"", .{c}) else "null",
+                    if (b.container_type) |t| try std.fmt.allocPrint(allocator, "\"{s}\"", .{t}) else "null",
                     if (b.is_cta_button) "true" else "false",
                     std.json.fmt(b.dominant_color, .{}),
                 });
@@ -1531,9 +1625,11 @@ pub fn extractPdfPackageNative(
         for (bg_cards.items) |card| {
             if (!first_card) try json_buf.print(",", .{});
             first_card = false;
+            const cw = card.right - card.left;
+            const is_full = cw >= (norm_canvas_w * 0.85);
             try json_buf.print(
-                "\n        {{\"bbox\": [{d:.1}, {d:.1}, {d:.1}, {d:.1}], \"fill_color\": {f}, \"stroke_color\": null}}",
-                .{ card.left, card.top, card.right, card.bottom, std.json.fmt(card.fill_hex, .{}) },
+                "\n        {{\"bbox\": [{d:.1}, {d:.1}, {d:.1}, {d:.1}], \"fill_color\": {f}, \"container_type\": \"{s}\", \"stroke_color\": null}}",
+                .{ card.left, card.top, card.right, card.bottom, std.json.fmt(card.fill_hex, .{}), if (is_full) "full_width_section" else "inner_card" },
             );
         }
         try json_buf.print("\n      ]\n    }}\n", .{});

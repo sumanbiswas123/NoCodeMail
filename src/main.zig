@@ -6,11 +6,26 @@ extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
 
 // C stdlib for zero-dependency robust file I/O
 extern "c" fn fopen(path: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*anyopaque;
+extern "c" fn _wfopen(path: [*:0]const u16, mode: [*:0]const u16) callconv(.c) ?*anyopaque;
 extern "c" fn fseek(stream: *anyopaque, offset: c_long, whence: c_int) callconv(.c) c_int;
 extern "c" fn ftell(stream: *anyopaque) callconv(.c) c_long;
 extern "c" fn fread(ptr: [*]u8, size: usize, count: usize, stream: *anyopaque) callconv(.c) usize;
 extern "c" fn fwrite(ptr: [*]const u8, size: usize, count: usize, stream: *anyopaque) callconv(.c) usize;
 extern "c" fn fclose(stream: *anyopaque) callconv(.c) c_int;
+
+fn openFileUtf8(path_u8: []const u8, mode_u8: []const u8) ?*anyopaque {
+    var path_w: [2048]u16 = undefined;
+    const w_len = win32_base.MultiByteToWideChar(65001, 0, path_u8.ptr, @intCast(path_u8.len), &path_w, @intCast(path_w.len - 1));
+    if (w_len <= 0) return null;
+    path_w[@intCast(w_len)] = 0;
+
+    var mode_w: [16]u16 = undefined;
+    const m_len = win32_base.MultiByteToWideChar(65001, 0, mode_u8.ptr, @intCast(mode_u8.len), &mode_w, @intCast(mode_w.len - 1));
+    if (m_len <= 0) return null;
+    mode_w[@intCast(m_len)] = 0;
+
+    return _wfopen(@ptrCast(&path_w), @ptrCast(&mode_w));
+}
 
 // WinSock API for embedded lightning-fast HTTP static file server
 const WSADATA = extern struct {
@@ -182,17 +197,30 @@ fn handleConnection(sock: usize) void {
     } else if (std.mem.endsWith(u8, url_path, "favicon.svg") or std.mem.endsWith(u8, url_path, ".svg")) {
         content = EMBED_FAVICON;
         content_type = "image/svg+xml";
-    } else if (std.mem.startsWith(u8, url_path, "/pkg/")) {
-        // Direct package asset serving by path: /pkg/<encoded_base_dir>/<rel_path> or /pkg/<encoded_full_path>
-        const decoded_sub = url_path[5..];
+    } else if (std.mem.startsWith(u8, url_path, "/pkg/") or
+               std.mem.startsWith(u8, url_path, "/C:") or std.mem.startsWith(u8, url_path, "/c:") or
+               std.mem.startsWith(u8, url_path, "/D:") or std.mem.startsWith(u8, url_path, "/d:") or
+               std.mem.startsWith(u8, url_path, "/C%3A") or std.mem.startsWith(u8, url_path, "/c%3A") or
+               std.mem.startsWith(u8, url_path, "/C%3a") or std.mem.startsWith(u8, url_path, "/c%3a") or
+               std.mem.startsWith(u8, url_path, "C:") or std.mem.startsWith(u8, url_path, "c:") or
+               std.mem.startsWith(u8, url_path, "D:") or std.mem.startsWith(u8, url_path, "d:") or
+               std.mem.startsWith(u8, url_path, "C%3A") or std.mem.startsWith(u8, url_path, "c%3A")) {
+        // Direct package asset serving by path: /pkg/<encoded_base_dir>/<rel_path> or /pkg/<encoded_full_path> or direct drive path
+        var raw_sub = url_path;
+        if (std.mem.startsWith(u8, raw_sub, "/pkg/")) {
+            raw_sub = raw_sub[5..];
+        } else if (std.mem.startsWith(u8, raw_sub, "/")) {
+            raw_sub = raw_sub[1..];
+        }
+
         var file_path_buf: [4096]u8 = undefined;
         var fpi: usize = 0;
         var bi: usize = 0;
-        while (bi < decoded_sub.len and fpi < file_path_buf.len - 1) {
-            if (decoded_sub[bi] == '%' and bi + 2 < decoded_sub.len) {
-                const hex = decoded_sub[bi + 1 .. bi + 3];
+        while (bi < raw_sub.len and fpi < file_path_buf.len - 1) {
+            if (raw_sub[bi] == '%' and bi + 2 < raw_sub.len) {
+                const hex = raw_sub[bi + 1 .. bi + 3];
                 const byte = std.fmt.parseInt(u8, hex, 16) catch {
-                    file_path_buf[fpi] = decoded_sub[bi];
+                    file_path_buf[fpi] = raw_sub[bi];
                     fpi += 1;
                     bi += 1;
                     continue;
@@ -201,7 +229,7 @@ fn handleConnection(sock: usize) void {
                 fpi += 1;
                 bi += 3;
             } else {
-                file_path_buf[fpi] = decoded_sub[bi];
+                file_path_buf[fpi] = raw_sub[bi];
                 fpi += 1;
                 bi += 1;
             }
@@ -212,9 +240,9 @@ fn handleConnection(sock: usize) void {
             if (b.* == '/') b.* = '\\';
         }
 
-        const disk_target: [:0]const u8 = file_path_buf[0..fpi :0];
+        const disk_target = file_path_buf[0..fpi];
 
-        if (fopen(disk_target.ptr, "rb")) |fh| {
+        if (openFileUtf8(disk_target, "rb") orelse fopen(file_path_buf[0..fpi :0].ptr, "rb")) |fh| {
             defer _ = fclose(fh);
             _ = fseek(fh, 0, 2);
             const file_size: usize = @intCast(ftell(fh));

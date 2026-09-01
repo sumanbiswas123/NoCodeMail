@@ -28,12 +28,12 @@ pub fn main() !void {
     pdf_extractor.initPdfEngine();
     defer pdf_extractor.destroyPdfEngine();
 
-    const pdf_path = "C:\\Users\\SumanBiswas\\Downloads\\PDFs\\cp-488747v2_R0_V1.pdf";
+    const pdf_path = "C:\\Users\\SumanBiswas\\Downloads\\Trelegy_Molecular superiority Mailer_V8_3554_4877.pdf";
     const win32 = struct {
         extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
     };
     const t0 = win32.GetTickCount64();
-    const res = try pdf_extractor.extractPdfPackage(allocator, pdf_path, 700, 1, null);
+    const res = try pdf_extractor.extractPdfPackage(allocator, pdf_path, 700, 2, null, null);
     const elapsed_ms = win32.GetTickCount64() - t0;
 
     std.debug.print("SUCCESS! Completed in {d} ms!\n", .{elapsed_ms});

@@ -56,6 +56,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const fileFolder = initialFilePath
     ? initialFilePath.replace(/[/\\][^/\\]+$/, "")
     : "";
+  const normalizedFolder = fileFolder ? fileFolder.replace(/\\/g, "/") : "";
+  const pkgPrefix = normalizedFolder ? `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/` : "";
 
   const startHtml = initialHtml && initialHtml.trim() ? initialHtml : DEFAULT_FALLBACK_HTML;
 
@@ -82,9 +84,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
   // Extract base URL for iframe head
   const getBaseUrl = useCallback(() => {
-    if (!fileFolder) return "";
-    return `http://127.0.0.1:28941/pkg/${encodeURIComponent(fileFolder)}/`;
-  }, [fileFolder]);
+    if (!normalizedFolder) return "";
+    return `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/`;
+  }, [normalizedFolder]);
 
   // Push new state to history
   const pushHistory = useCallback((newHtml: string) => {
@@ -196,8 +198,17 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       el.removeAttribute("spellcheck");
     });
 
-    return `<!DOCTYPE html>\n${clone.outerHTML}`;
-  }, [history, historyIndex, startHtml]);
+    let cleanHtml = `<!DOCTYPE html>\n${clone.outerHTML}`;
+    if (pkgPrefix) {
+      const escapedPrefix = pkgPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix + "assets/", "g"), "assets/");
+      cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix, "g"), "");
+    }
+    cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\/assets\//g, "assets/");
+    cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\//g, "");
+
+    return cleanHtml;
+  }, [history, historyIndex, startHtml, pkgPrefix]);
 
   // Mount document into isolated Iframe with injected <base> tag
   useEffect(() => {
@@ -217,6 +228,13 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const baseTag = baseUrl ? `<base href="${baseUrl}">` : "";
 
     let preparedHtml = currentHtml;
+    if (pkgPrefix) {
+      preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(assets\/[^"']+)["']/gi, `src="${pkgPrefix}$1"`);
+      preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(asset_[^"']+)["']/gi, `src="${pkgPrefix}assets/$1"`);
+      preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?(assets\/[^'")]+)['"]?\)/gi, `url('${pkgPrefix}$1')`);
+      preparedHtml = preparedHtml.replace(/url\(['"]?(?:\.\/)?(asset_[^'")]+)['"]?\)/gi, `url('${pkgPrefix}assets/$1')`);
+    }
+
     if (preparedHtml.includes("<head>")) {
       preparedHtml = preparedHtml.replace("<head>", `<head>${baseTag}`);
     } else if (preparedHtml.includes("<html>")) {
