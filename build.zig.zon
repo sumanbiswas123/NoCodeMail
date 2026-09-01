@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x3e314fb1909353bd,
+    .name = .nocodemail,
+    .version = "1.0.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .webview = .{
+            .url = "git+https://github.com/happystraw/zig-webview#3e6822d30896aa434435edae23b35ece9c20ffac",
+            .hash = "webview-0.0.0-mgPxHLxUKQBvcezqN-H2oeKpZmLQbObTxi7aoJJBcRia",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
