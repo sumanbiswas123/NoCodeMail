@@ -9,8 +9,13 @@ pdf_oxide_engine.dll
 pdf_oxide_html_test/
 oxide_bridge.py
 
-# Embedded UI bundle (built via frontend `npm run build`)
+# Embedded UI bundles (both root ui/ and src/embedded_ui/)
 ui/
+src/embedded_ui/
+Screens UI/
+
+# Embedded binaries
+src/embedded_bins/
 
 # Node / Frontend build artifacts & dependencies
 **/node_modules/
