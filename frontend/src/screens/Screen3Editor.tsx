@@ -69,22 +69,16 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   // Selected DOM element state
   const [selectedDomElement, setSelectedDomElement] = useState<HTMLElement | null>(null);
   const [selectedTagName, setSelectedTagName] = useState<string>("div");
-  const [selectionRect, setSelectionRect] = useState<{
-    top: number;
-    left: number;
-    width: number;
-    height: number;
-  } | null>(null);
 
   // Inline CSS state for StyleInspector
   const [inlineStyles, setInlineStyles] = useState<Record<string, string>>({});
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const emailContainerRef = useRef<HTMLDivElement>(null);
   const isInternalUpdateRef = useRef<boolean>(false);
   const hasInitSelectionRef = useRef<boolean>(false);
 
-  // Extract base URL for iframe head
+  // Extract base URL for image resolution
   const getBaseUrl = useCallback(() => {
     if (!normalizedFolder) return "";
     return `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/`;
@@ -103,119 +97,75 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     setIsSaved(false);
   }, [historyIndex]);
 
-  // Extract styles helper
+  const selectedDomElementRef = useRef<HTMLElement | null>(null);
+
+  // Extract natural styling for Style Inspector (Explicit styles + natural HTML attributes)
   const extractElementStyles = (el: HTMLElement) => {
     const stylesObj: Record<string, string> = {};
     for (let i = 0; i < el.style.length; i++) {
       const prop = el.style[i];
-      stylesObj[prop] = el.style.getPropertyValue(prop);
+      const val = el.style.getPropertyValue(prop);
+      if (val && !prop.startsWith("-webkit-")) {
+        stylesObj[prop] = val;
+      }
     }
 
-    const win = el.ownerDocument?.defaultView || window;
-    const computed = win.getComputedStyle(el);
-    const standardProps = [
-      "color",
-      "font-size",
-      "font-weight",
-      "font-family",
-      "line-height",
-      "margin",
-      "padding",
-      "background-color",
-      "text-align",
-      "border-radius",
-    ];
-
-    standardProps.forEach((prop) => {
-      if (!stylesObj[prop]) {
-        const val = computed.getPropertyValue(prop);
-        if (val && val !== "rgba(0, 0, 0, 0)" && val !== "normal" && val !== "none") {
-          stylesObj[prop] = val;
-        }
-      }
-    });
-
+    // Natural HTML attributes if style is not explicitly defined
+    if (!stylesObj["width"] && el.getAttribute("width")) {
+      const w = el.getAttribute("width")!;
+      stylesObj["width"] = w.includes("%") ? w : `${w}px`;
+    }
+    if (!stylesObj["height"] && el.getAttribute("height")) {
+      const h = el.getAttribute("height")!;
+      stylesObj["height"] = h.includes("%") ? h : `${h}px`;
+    }
+    if (!stylesObj["background-color"] && el.getAttribute("bgcolor")) {
+      stylesObj["background-color"] = el.getAttribute("bgcolor")!;
+    }
     return stylesObj;
   };
-
-  // Update selection bounding box relative to canvasContainerRef
-  const updateSelectionOverlay = useCallback((el: HTMLElement | null) => {
-    if (!el || !canvasContainerRef.current || !iframeRef.current) {
-      setSelectionRect(null);
-      return;
-    }
-    const containerRect = canvasContainerRef.current.getBoundingClientRect();
-    const iframeRect = iframeRef.current.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-
-    setSelectionRect({
-      top: iframeRect.top - containerRect.top + canvasContainerRef.current.scrollTop + elRect.top,
-      left: iframeRect.left - containerRect.left + canvasContainerRef.current.scrollLeft + elRect.left,
-      width: elRect.width,
-      height: elRect.height,
-    });
-  }, []);
 
   // Handler for selecting an element in the email canvas
   const handleSelectElement = useCallback((target: HTMLElement) => {
     if (!target) return;
-    const doc = iframeRef.current?.contentDocument;
-    if (!doc || target === doc.body || target === doc.documentElement) return;
+    if (target === emailContainerRef.current) return;
 
+    // Deselect previous node
+    if (emailContainerRef.current) {
+      emailContainerRef.current.querySelectorAll(".editor-active-selected").forEach((node) => {
+        (node as HTMLElement).classList.remove("editor-active-selected");
+      });
+    }
+
+    target.classList.add("editor-active-selected");
+    selectedDomElementRef.current = target;
     setSelectedDomElement(target);
     setSelectedTagName(target.tagName.toLowerCase());
 
     const styles = extractElementStyles(target);
     setInlineStyles(styles);
-    updateSelectionOverlay(target);
-  }, [updateSelectionOverlay]);
-
-  // Adjust iframe height to fit its internal content accurately without runaway scrollHeight growth
-  const autoResizeIframe = useCallback(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !iframe.contentDocument) return;
-    const doc = iframe.contentDocument;
-    if (!doc.body) return;
-
-    let maxBottom = 0;
-    Array.from(doc.body.children).forEach((child) => {
-      const el = child as HTMLElement;
-      if (el.tagName.toLowerCase() === "script" || el.tagName.toLowerCase() === "style") return;
-      const bottom = el.offsetTop + el.offsetHeight;
-      if (bottom > maxBottom) maxBottom = bottom;
-    });
-
-    if (maxBottom <= 0) {
-      const firstChild = doc.body.firstElementChild as HTMLElement | null;
-      maxBottom = firstChild ? firstChild.offsetHeight : doc.body.scrollHeight;
-    }
-
-    const finalH = Math.max(Math.ceil(maxBottom) + 20, 450);
-    iframe.style.height = `${finalH}px`;
   }, []);
 
-  // Export clean HTML (strips <base> tag and editor attributes)
+  // Export clean HTML (strips editor attributes)
   const exportPristineHtml = useCallback((): string => {
-    const iframe = iframeRef.current;
-    if (!iframe || !iframe.contentDocument) {
+    const container = emailContainerRef.current;
+    if (!container) {
       return history[historyIndex] || startHtml;
     }
 
-    const doc = iframe.contentDocument;
-    // Deep clone the document root in memory (< 1ms execution)
-    const clone = doc.documentElement.cloneNode(true) as HTMLElement;
+    // Deep clone the document root in memory
+    const clone = container.cloneNode(true) as HTMLElement;
 
-    // 1. Remove the injected runtime <base> tag
-    const baseEl = clone.querySelector("base");
-    if (baseEl) baseEl.remove();
-
-    // 2. Remove all editor attributes
+    // Remove all editor attributes
     clone.querySelectorAll("[contenteditable]").forEach((el) => {
       el.removeAttribute("contenteditable");
       el.removeAttribute("spellcheck");
     });
+    clone.querySelectorAll(".editor-active-selected").forEach((el) => {
+      el.classList.remove("editor-active-selected");
+    });
 
-    let cleanHtml = `<!DOCTYPE html>\n${clone.outerHTML}`;
+    let cleanHtml = clone.innerHTML;
     if (pkgPrefix) {
       const escapedPrefix = pkgPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix + "assets/", "g"), "assets/");
@@ -224,40 +174,77 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\/assets\//g, "assets/");
     cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\//g, "");
 
+    // Wrap in standard doctype if needed
+    if (!cleanHtml.toLowerCase().includes("<!doctype html>")) {
+      cleanHtml = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n</head>\n<body style="margin:0;padding:0;">\n${cleanHtml}\n</body>\n</html>`;
+    }
+
     return cleanHtml;
   }, [history, historyIndex, startHtml, pkgPrefix]);
 
-  // Mount document into isolated Iframe with injected <base> tag
+  // 1. Persistent event listeners on canvas container (registered once)
+  useEffect(() => {
+    const container = emailContainerRef.current;
+    if (!container) return;
+
+    const handleContainerPointerDown = (e: MouseEvent) => {
+      let target = e.target as HTMLElement | null;
+      if (!target || target === container) {
+        if (selectedDomElementRef.current) {
+          selectedDomElementRef.current.classList.remove("editor-active-selected");
+        }
+        selectedDomElementRef.current = null;
+        setSelectedDomElement(null);
+        setInlineStyles({});
+        return;
+      }
+
+      handleSelectElement(target);
+    };
+
+    const handleContainerInput = () => {
+      setIsSaved(false);
+    };
+
+    const handleDragStart = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    container.addEventListener("pointerdown", handleContainerPointerDown, true);
+    container.addEventListener("click", handleContainerPointerDown, true);
+    container.addEventListener("dragstart", handleDragStart);
+    container.addEventListener("input", handleContainerInput);
+
+    return () => {
+      container.removeEventListener("pointerdown", handleContainerPointerDown, true);
+      container.removeEventListener("click", handleContainerPointerDown, true);
+      container.removeEventListener("dragstart", handleDragStart);
+      container.removeEventListener("input", handleContainerInput);
+    };
+  }, [handleSelectElement]);
+
+  // 2. Mount document into direct DOM container on load or Undo/Redo
   useEffect(() => {
     if (isInternalUpdateRef.current) {
       isInternalUpdateRef.current = false;
       return;
     }
 
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!doc) return;
+    const container = emailContainerRef.current;
+    if (!container) return;
 
     const currentHtml = history[historyIndex] || startHtml;
-    const baseUrl = getBaseUrl();
-    const baseTag = baseUrl ? `<base href="${baseUrl}">` : "";
 
     let preparedHtml = currentHtml;
-    // 1. Rewrite absolute disk paths e.g. src="C:\Users\..." or src="C:/Users/..."
     preparedHtml = preparedHtml.replace(/src=["'](?:[a-zA-Z]:[/\\][^"']*[/\\]assets[/\\])([^"']+)["']/gi, (_m, fname) => {
       return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
     });
-    // 2. Rewrite src="assets/..." or src="./assets/..."
     preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?assets\/([^"']+)["']/gi, (_m, fname) => {
       return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
     });
-    // 3. Rewrite src="asset_..." or src="./asset_..."
     preparedHtml = preparedHtml.replace(/src=["'](?:\.\/)?(asset_[^"']+)["']/gi, (_m, fname) => {
       return pkgPrefix ? `src="${pkgPrefix}assets/${fname}"` : `src="/assets/${fname}"`;
     });
-    // 4. Rewrite background-image URLs
     preparedHtml = preparedHtml.replace(/url\(['"]?(?:[a-zA-Z]:[/\\][^'")]+[/\\]assets[/\\])([^'")]+)['"]?\)/gi, (_m, fname) => {
       return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
     });
@@ -268,22 +255,21 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
     });
 
-    if (preparedHtml.includes("<head>")) {
-      preparedHtml = preparedHtml.replace("<head>", `<head>${baseTag}`);
-    } else if (preparedHtml.includes("<html>")) {
-      preparedHtml = preparedHtml.replace("<html>", `<html><head>${baseTag}</head>`);
-    } else {
-      preparedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">${baseTag}</head><body style="margin:0;padding:0;">${preparedHtml}</body></html>`;
+    let bodyContent = preparedHtml;
+    const bodyMatch = /<body[^>]*>([\s\S]*)<\/body>/i.exec(preparedHtml);
+    if (bodyMatch) {
+      bodyContent = bodyMatch[1];
     }
 
-    doc.open();
-    doc.write(preparedHtml);
-    doc.close();
+    container.innerHTML = bodyContent;
 
-    // Enable inline contentEditable on text leaf elements
+    // Enable inline contentEditable on text leaf elements & disable phantom image drag
     const editableTags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "td", "li", "button", "b", "strong", "em", "div"];
-    doc.querySelectorAll("*").forEach((node) => {
+    container.querySelectorAll("*").forEach((node) => {
       const el = node as HTMLElement;
+      if (el.tagName.toLowerCase() === "img") {
+        el.setAttribute("draggable", "false");
+      }
       if (editableTags.includes(el.tagName.toLowerCase())) {
         const hasBlockChildren = Array.from(el.children).some((c) =>
           ["div", "table", "p", "h1", "h2", "h3", "h4", "h5", "h6", "section"].includes(c.tagName.toLowerCase())
@@ -294,84 +280,51 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         }
       }
     });
-
-    // Auto-resize height once images finish layout
-    autoResizeIframe();
-    setTimeout(autoResizeIframe, 150);
-
-    // Event listeners on iframe document
-    const handleDocPointerDown = (e: MouseEvent) => {
-      let target = e.target as HTMLElement | null;
-      if (!target || target === doc.body || target === doc.documentElement) return;
-      handleSelectElement(target);
-    };
-
-    const handleDocInput = () => {
-      setIsSaved(false);
-      autoResizeIframe();
-      if (selectedDomElement) {
-        updateSelectionOverlay(selectedDomElement);
-      }
-    };
-
-    const handleDocBlur = () => {
-      isInternalUpdateRef.current = true;
-      pushHistory(exportPristineHtml());
-    };
-
-    doc.addEventListener("pointerdown", handleDocPointerDown, true);
-    doc.addEventListener("click", handleDocPointerDown, true);
-    doc.addEventListener("input", handleDocInput);
-    doc.addEventListener("blur", handleDocBlur, true);
-
-    // Auto select first element only on initial load
-    if (!hasInitSelectionRef.current) {
-      hasInitSelectionRef.current = true;
-      const firstHeading = doc.querySelector("h1, h2, h3, p, a, div, img");
-      if (firstHeading) {
-        handleSelectElement(firstHeading as HTMLElement);
-      }
-    } else if (selectedDomElement) {
-      updateSelectionOverlay(selectedDomElement);
-    }
-
-    return () => {
-      doc.removeEventListener("pointerdown", handleDocPointerDown, true);
-      doc.removeEventListener("click", handleDocPointerDown, true);
-      doc.removeEventListener("input", handleDocInput);
-      doc.removeEventListener("blur", handleDocBlur, true);
-    };
-  }, [historyIndex, startHtml, getBaseUrl, handleSelectElement, autoResizeIframe, pushHistory, exportPristineHtml]);
-
-  // Keep selection overlay updated on scroll or resize
-  useEffect(() => {
-    const handleScrollOrResize = () => {
-      if (selectedDomElement) {
-        updateSelectionOverlay(selectedDomElement);
-      }
-    };
-    const scrollContainer = canvasContainerRef.current;
-    if (scrollContainer) {
-      scrollContainer.addEventListener("scroll", handleScrollOrResize);
-    }
-    window.addEventListener("resize", handleScrollOrResize);
-    return () => {
-      if (scrollContainer) {
-        scrollContainer.removeEventListener("scroll", handleScrollOrResize);
-      }
-      window.removeEventListener("resize", handleScrollOrResize);
-    };
-  }, [selectedDomElement, updateSelectionOverlay]);
+  }, [historyIndex, startHtml, pkgPrefix]);
 
   // Style update handlers
   const handleUpdateStyle = (property: string, value: string) => {
-    const updated = { ...inlineStyles, [property]: value };
+    let cleanVal = value.trim();
+
+    // Auto-append px for pure numeric dimensions (e.g. "20" -> "20px")
+    const dimensionProps = [
+      "font-size", "width", "height", "max-width", "min-width", "max-height", "min-height",
+      "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+      "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+      "border-width", "border-radius", "top", "left", "right", "bottom", "letter-spacing"
+    ];
+    if (dimensionProps.includes(property.toLowerCase()) && /^[+-]?\d+(\.\d+)?$/.test(cleanVal)) {
+      cleanVal = `${cleanVal}px`;
+    }
+
+    const updated = { ...inlineStyles, [property]: cleanVal };
     setInlineStyles(updated);
 
-    if (selectedDomElement) {
-      selectedDomElement.style.setProperty(property, value);
-      updateSelectionOverlay(selectedDomElement);
-      autoResizeIframe();
+    const el = selectedDomElementRef.current || selectedDomElement;
+    if (el) {
+      // 1. Direct style property assignment
+      el.style.setProperty(property, cleanVal, "important");
+      const camelProp = property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      (el.style as any)[camelProp] = cleanVal;
+
+      // 2. Direct attribute sync for email engines
+      const propLower = property.toLowerCase();
+      if (propLower === "width") {
+        el.setAttribute("width", cleanVal.replace(/px/g, ""));
+        el.style.maxWidth = cleanVal;
+      } else if (propLower === "height") {
+        el.setAttribute("height", cleanVal.replace(/px/g, ""));
+      } else if (propLower === "background-color" || propLower === "background") {
+        el.setAttribute("bgcolor", cleanVal);
+        el.style.backgroundColor = cleanVal;
+      } else if (propLower === "text-align") {
+        el.setAttribute("align", cleanVal);
+      } else if (propLower === "color") {
+        el.style.color = cleanVal;
+      } else if (propLower === "font-size") {
+        el.style.fontSize = cleanVal;
+      }
+
       setIsSaved(false);
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
@@ -383,10 +336,22 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     delete updated[property];
     setInlineStyles(updated);
 
-    if (selectedDomElement) {
-      selectedDomElement.style.removeProperty(property);
-      updateSelectionOverlay(selectedDomElement);
-      autoResizeIframe();
+    const el = selectedDomElementRef.current || selectedDomElement;
+    if (el) {
+      el.style.removeProperty(property);
+      const camelProp = property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      (el.style as any)[camelProp] = "";
+
+      const propLower = property.toLowerCase();
+      if (propLower === "width") {
+        el.removeAttribute("width");
+      } else if (propLower === "height") {
+        el.removeAttribute("height");
+      } else if (propLower === "background-color" || propLower === "background") {
+        el.removeAttribute("bgcolor");
+      } else if (propLower === "text-align") {
+        el.removeAttribute("align");
+      }
       setIsSaved(false);
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
@@ -453,81 +418,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     window.addEventListener("keydown", handleKeyDown, true);
 
-    const iframeDoc = iframeRef.current?.contentDocument;
-    const iframeWin = iframeRef.current?.contentWindow;
-    if (iframeDoc) iframeDoc.addEventListener("keydown", handleKeyDown, true);
-    if (iframeWin) iframeWin.addEventListener("keydown", handleKeyDown, true);
-
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
-      if (iframeDoc) iframeDoc.removeEventListener("keydown", handleKeyDown, true);
-      if (iframeWin) iframeWin.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [historyIndex, history, fileName, initialFilePath]);
-
-  // Drag resize handler for selected element (Smooth 60fps RAF, 0 DOM clone overhead during drag)
-  const handleResizeMouseDown = (e: React.MouseEvent, handle: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!selectedDomElement || !selectionRect) return;
-
-    const el = selectedDomElement;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startW = selectionRect.width;
-    const startH = selectionRect.height;
-    let finalW = startW;
-    let finalH = startH;
-    let rafId: number | null = null;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      moveEvent.preventDefault();
-      const deltaX = moveEvent.clientX - startX;
-      const deltaY = moveEvent.clientY - startY;
-      let newW = startW;
-      let newH = startH;
-
-      if (handle.includes("right") || handle.includes("e")) newW += deltaX;
-      if (handle.includes("left") || handle.includes("w")) newW -= deltaX;
-      if (handle.includes("bottom") || handle.includes("s")) newH += deltaY;
-      if (handle.includes("top") || handle.includes("n")) newH -= deltaY;
-
-      newW = Math.max(20, Math.round(newW));
-      newH = Math.max(14, Math.round(newH));
-      finalW = newW;
-      finalH = newH;
-
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        el.style.width = `${newW}px`;
-        el.style.height = `${newH}px`;
-        updateSelectionOverlay(el);
-      });
-    };
-
-    const handleMouseUp = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-
-      // Commit to React state and push a single Undo history checkpoint
-      el.style.width = `${finalW}px`;
-      el.style.height = `${finalH}px`;
-      setInlineStyles((prev) => ({
-        ...prev,
-        width: `${finalW}px`,
-        height: `${finalH}px`,
-      }));
-      updateSelectionOverlay(el);
-      autoResizeIframe();
-      setIsSaved(false);
-      isInternalUpdateRef.current = true;
-      pushHistory(exportPristineHtml());
-    };
-
-    window.addEventListener("mousemove", handleMouseMove, { passive: false });
-    window.addEventListener("mouseup", handleMouseUp, { once: true });
-  };
 
   return (
     <div className="screen3-container">
@@ -639,7 +533,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             <div className="indicator-line"></div>
           </div>
 
-          {/* Email Iframe Sandbox Card */}
+          {/* Email Direct DOM Card */}
           <div
             className="email-iframe-wrapper"
             style={{ 
@@ -654,90 +548,17 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
               transition: "width 0.2s ease",
             }}
           >
-            <iframe
-              ref={iframeRef}
-              title="email-canvas"
-              className="email-sandboxed-iframe"
+            <div
+              ref={emailContainerRef}
+              className="email-direct-dom-root"
               style={{
                 width: "100%",
-                height: "500px",
-                border: "none",
-                borderRadius: "8px",
+                minHeight: "450px",
                 display: "block",
                 backgroundColor: "#ffffff",
               }}
             />
           </div>
-
-          {/* Dynamic Selection Overlay Box & Resize Handles */}
-          {selectionRect && selectedDomElement && (
-            <div
-              className="dynamic-selection-overlay"
-              style={{
-                position: "absolute",
-                top: `${selectionRect.top}px`,
-                left: `${selectionRect.left}px`,
-                width: `${selectionRect.width}px`,
-                height: `${selectionRect.height}px`,
-                pointerEvents: "none",
-              }}
-            >
-              {/* Tag Badge */}
-              <div className="element-tag-badge" style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
-                <span>{selectedTagName}</span>
-                {selectedTagName === "img" && (
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      const res = await nativeIPC.chooseImage();
-                      if (res.success && res.path && selectedDomElement) {
-                        const newPath = res.path.replace(/\\/g, "/");
-                        const filename = newPath.substring(newPath.lastIndexOf("/") + 1);
-                        // Update image src in DOM with clean relative asset path
-                        (selectedDomElement as HTMLImageElement).setAttribute("src", `assets/${filename}`);
-                        (selectedDomElement as HTMLImageElement).src = `http://127.0.0.1:28941/pkg/${encodeURIComponent(fileFolder)}/assets/${filename}`;
-                        setIsSaved(false);
-                        isInternalUpdateRef.current = true;
-                        pushHistory(exportPristineHtml());
-                        updateSelectionOverlay(selectedDomElement);
-                      }
-                    }}
-                    style={{
-                      background: "#ffffff",
-                      color: "#2563eb",
-                      border: "none",
-                      borderRadius: "3px",
-                      padding: "1px 5px",
-                      fontSize: "9px",
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "3px",
-                    }}
-                    title="Replace Image File"
-                  >
-                    Replace Image
-                  </button>
-                )}
-              </div>
-
-              {/* Dimension Pill */}
-              <div className="dimension-pill" style={{ pointerEvents: "auto" }}>
-                {Math.round(selectionRect.width)} × {Math.round(selectionRect.height)}
-              </div>
-
-              {/* 8 Active Resize Handles */}
-              <div className="resize-handle top-left" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "top-left")}></div>
-              <div className="resize-handle top-center" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "top")}></div>
-              <div className="resize-handle top-right" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "top-right")}></div>
-              <div className="resize-handle middle-right" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "right")}></div>
-              <div className="resize-handle bottom-right" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "bottom-right")}></div>
-              <div className="resize-handle bottom-center" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "bottom")}></div>
-              <div className="resize-handle bottom-left" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "bottom-left")}></div>
-              <div className="resize-handle middle-left" style={{ pointerEvents: "auto" }} onMouseDown={(e) => handleResizeMouseDown(e, "left")}></div>
-            </div>
-          )}
         </div>
 
         {/* Right Sidebar: Chrome DevTools Style Inspector */}

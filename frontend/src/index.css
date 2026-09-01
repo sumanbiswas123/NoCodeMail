@@ -130,3 +130,24 @@ body {
   background: #94a3b8;
 }
 
+/* Email Canvas Selection & Live Focus Styles */
+.email-direct-dom-root {
+  position: relative;
+}
+
+.email-direct-dom-root *:hover {
+  outline: 1.5px dashed #93c5fd !important;
+  outline-offset: 1px !important;
+  cursor: pointer !important;
+}
+
+.email-direct-dom-root .editor-active-selected {
+  outline: 2.5px solid #2563eb !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25) !important;
+  border-radius: 2px !important;
+}
+
+.email-direct-dom-root img.editor-active-selected {
+  cursor: default !important;
+}

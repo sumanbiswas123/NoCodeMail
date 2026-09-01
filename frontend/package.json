@@ -16,7 +16,8 @@
     "lucide-react": "^1.34.0",
     "mjml-browser": "^5.4.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-moveable": "^0.56.0"
   },
   "devDependencies": {
     "@types/mjml-browser": "^5.0.0",

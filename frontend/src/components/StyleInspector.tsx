@@ -232,32 +232,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
         </datalist>
       ))}
 
-      {/* Chrome DevTools Tab Bar */}
-      <div className="devtools-tabs">
-        <button
-          className={`tab-item ${activeTab === "styles" ? "active" : ""}`}
-          onClick={() => setActiveTab("styles")}
-        >
-          Styles
-        </button>
-        <button
-          className={`tab-item ${activeTab === "computed" ? "active" : ""}`}
-          onClick={() => setActiveTab("computed")}
-        >
-          Computed
-        </button>
-        <button
-          className={`tab-item ${activeTab === "layout" ? "active" : ""}`}
-          onClick={() => setActiveTab("layout")}
-        >
-          Layout
-        </button>
-        <button className="tab-item">Event Listeners</button>
-        <button className="tab-item">DOM Breakpoints</button>
-        <button className="tab-item">Properties</button>
-        <span className="tab-overflow">&gt;&gt;</span>
-      </div>
-
       {/* Chrome DevTools Filter & Action Bar */}
       <div className="devtools-filter-bar">
         <div className="filter-input-wrapper">
