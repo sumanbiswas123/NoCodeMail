@@ -151,3 +151,95 @@ body {
 .email-direct-dom-root img.editor-active-selected {
   cursor: default !important;
 }
+
+/* Chrome DevTools Compact Autocomplete Popup */
+.devtools-compact-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 9999;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  max-height: 125px;
+  min-width: 140px;
+  overflow-y: auto;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.devtools-compact-item {
+  padding: 3px 8px;
+  cursor: pointer;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  line-height: 1.3;
+  transition: background 0.1s ease;
+}
+
+.devtools-compact-item:hover,
+.devtools-compact-item.active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.devtools-compact-item .current-badge {
+  font-size: 9px;
+  font-weight: 700;
+  background: rgba(37, 99, 235, 0.15);
+  color: #2563eb;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.devtools-compact-item:hover .current-badge,
+.devtools-compact-item.active .current-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+/* Chrome DevTools Visual Edit Box Indicator */
+.devtools-prop-input,
+.devtools-val-input {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 2px;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 3px;
+  transition: all 0.12s ease;
+}
+
+.devtools-prop-input:hover,
+.devtools-val-input:hover {
+  border-color: #cbd5e1;
+}
+
+.devtools-prop-input:focus,
+.devtools-val-input:focus {
+  border: 1px solid #2563eb !important;
+  background: #ffffff !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18) !important;
+}
+
+/* Chrome DevTools Unchecked / Disabled Property Row */
+.css-prop-row.disabled {
+  opacity: 0.45 !important;
+}
+
+.css-prop-row.disabled .prop-name,
+.css-prop-row.disabled .prop-val,
+.css-prop-row.disabled .devtools-prop-input,
+.css-prop-row.disabled .devtools-val-input {
+  text-decoration: line-through !important;
+  color: #94a3b8 !important;
+}
+
+
+

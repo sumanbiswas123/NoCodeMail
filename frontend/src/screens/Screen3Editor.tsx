@@ -233,6 +233,34 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const container = emailContainerRef.current;
     if (!container) return;
 
+    // Track previously selected element path before innerHTML replacement
+    const getDomPath = (el: HTMLElement, root: HTMLElement): number[] => {
+      const path: number[] = [];
+      let curr: HTMLElement | null = el;
+      while (curr && curr !== root) {
+        const parent = curr.parentElement;
+        if (!parent) break;
+        const index = Array.from(parent.children).indexOf(curr);
+        path.unshift(index);
+        curr = parent;
+      }
+      return path;
+    };
+
+    const getFromDomPath = (path: number[], root: HTMLElement): HTMLElement | null => {
+      let curr: HTMLElement = root;
+      for (const idx of path) {
+        if (!curr.children || !curr.children[idx]) return null;
+        curr = curr.children[idx] as HTMLElement;
+      }
+      return curr;
+    };
+
+    let selectedPath: number[] | null = null;
+    if (selectedDomElementRef.current && container.contains(selectedDomElementRef.current)) {
+      selectedPath = getDomPath(selectedDomElementRef.current, container);
+    }
+
     const currentHtml = history[historyIndex] || startHtml;
 
     let preparedHtml = currentHtml;
@@ -280,6 +308,26 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         }
       }
     });
+
+    // Re-synchronize selected element and Style Inspector with undone/redone state
+    if (selectedPath) {
+      const reselectedEl = getFromDomPath(selectedPath, container);
+      if (reselectedEl) {
+        reselectedEl.classList.add("editor-active-selected");
+        selectedDomElementRef.current = reselectedEl;
+        setSelectedDomElement(reselectedEl);
+        setSelectedTagName(reselectedEl.tagName.toLowerCase());
+        setInlineStyles(extractElementStyles(reselectedEl));
+      } else {
+        selectedDomElementRef.current = null;
+        setSelectedDomElement(null);
+        setInlineStyles({});
+      }
+    } else {
+      selectedDomElementRef.current = null;
+      setSelectedDomElement(null);
+      setInlineStyles({});
+    }
   }, [historyIndex, startHtml, pkgPrefix]);
 
   // Style update handlers
@@ -325,6 +373,44 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         el.style.fontSize = cleanVal;
       }
 
+      setIsSaved(false);
+      isInternalUpdateRef.current = true;
+      pushHistory(exportPristineHtml());
+    }
+  };
+
+  const handleRenameStyle = (oldProperty: string, newProperty: string, value: string) => {
+    let cleanVal = value.trim();
+
+    const dimensionProps = [
+      "font-size", "width", "height", "max-width", "min-width", "max-height", "min-height",
+      "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+      "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+      "border-width", "border-radius", "top", "left", "right", "bottom", "letter-spacing"
+    ];
+    if (dimensionProps.includes(newProperty.toLowerCase()) && /^[+-]?\d+(\.\d+)?$/.test(cleanVal)) {
+      cleanVal = `${cleanVal}px`;
+    }
+
+    // Preserve exact in-place key order
+    const updated: Record<string, string> = {};
+    Object.keys(inlineStyles).forEach((k) => {
+      if (k === oldProperty) {
+        if (newProperty.trim()) {
+          updated[newProperty.trim()] = cleanVal;
+        }
+      } else {
+        updated[k] = inlineStyles[k];
+      }
+    });
+    setInlineStyles(updated);
+
+    const el = selectedDomElementRef.current || selectedDomElement;
+    if (el) {
+      el.style.removeProperty(oldProperty);
+      if (newProperty.trim()) {
+        el.style.setProperty(newProperty.trim(), cleanVal, "important");
+      }
       setIsSaved(false);
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
@@ -568,6 +654,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             inlineStyles={inlineStyles}
             onUpdateStyle={handleUpdateStyle}
             onRemoveStyle={handleRemoveStyle}
+            onRenameStyle={handleRenameStyle}
           />
         </aside>
       </div>

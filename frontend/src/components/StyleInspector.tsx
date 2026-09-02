@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Plus, SlidersHorizontal, HelpCircle } from "lucide-react";
 import { BoxModel } from "./BoxModel";
 
@@ -14,6 +14,7 @@ interface StyleInspectorProps {
   inlineStyles: Record<string, string>;
   onUpdateStyle: (property: string, value: string) => void;
   onRemoveStyle: (property: string) => void;
+  onRenameStyle?: (oldProperty: string, newProperty: string, value: string) => void;
 }
 
 const CSS_PROPERTY_SUGGESTIONS = [
@@ -22,16 +23,20 @@ const CSS_PROPERTY_SUGGESTIONS = [
   "padding-bottom", "padding-left", "margin", "margin-top", "margin-right", 
   "margin-bottom", "margin-left", "border", "border-radius", "border-color", 
   "border-width", "border-style", "width", "height", "max-width", "min-width", 
-  "display", "vertical-align", "text-decoration", "letter-spacing", "opacity"
+  "display", "position", "top", "left", "right", "bottom", "z-index",
+  "vertical-align", "text-decoration", "letter-spacing", "opacity", "overflow", "cursor"
 ];
 
 const CSS_VALUE_SUGGESTIONS: Record<string, string[]> = {
+  "position": ["relative", "absolute", "static", "fixed", "sticky"],
   "display": ["block", "inline-block", "inline", "flex", "table", "table-cell", "none"],
   "font-weight": ["normal", "bold", "300", "400", "500", "600", "700", "800", "900"],
   "text-align": ["left", "center", "right", "justify"],
   "vertical-align": ["top", "middle", "bottom", "baseline"],
   "text-decoration": ["none", "underline", "line-through"],
   "border-style": ["solid", "dashed", "dotted", "none", "double"],
+  "cursor": ["pointer", "default", "text", "move", "not-allowed"],
+  "overflow": ["visible", "hidden", "scroll", "auto"],
   "font-family": [
     "Arial, Helvetica, sans-serif",
     "Helvetica, Arial, sans-serif",
@@ -39,7 +44,7 @@ const CSS_VALUE_SUGGESTIONS: Record<string, string[]> = {
     "Georgia, serif",
     "'Times New Roman', Times, serif",
     "'Courier New', Courier, monospace",
-    "system-ui, -apple-system, sans-serif"
+    "Inter, system-ui, sans-serif"
   ],
 };
 
@@ -48,12 +53,35 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   inlineStyles,
   onUpdateStyle,
   onRemoveStyle,
+  onRenameStyle,
 }) => {
-  const [activeTab, setActiveTab] = useState<"styles" | "computed" | "layout">("styles");
   const [filterText, setFilterText] = useState("");
   const [newProp, setNewProp] = useState("");
   const [newVal, setNewVal] = useState("");
-  const [isAddingRule, setIsAddingRule] = useState(false);
+  const [disabledProps, setDisabledProps] = useState<Set<string>>(new Set());
+  const [focusedField, setFocusedField] = useState<{ id: string; type: "prop" | "val"; propName?: string } | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
+
+  const newPropInputRef = useRef<HTMLInputElement>(null);
+  const newValInputRef = useRef<HTMLInputElement>(null);
+
+  const blurTimerRef = useRef<number | null>(null);
+
+  const handleFieldFocus = (field: { id: string; type: "prop" | "val"; propName?: string }) => {
+    if (blurTimerRef.current) {
+      window.clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+    setFocusedField(field);
+    setHighlightedIndex(0);
+  };
+
+  const handleFieldBlur = () => {
+    if (blurTimerRef.current) window.clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = window.setTimeout(() => {
+      setFocusedField(null);
+    }, 300);
+  };
 
   // Find all matched stylesheet rules from the element's owner document
   const matchedRules = useMemo<MatchedRule[]>(() => {
@@ -98,22 +126,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     return rules;
   }, [selectedElement, inlineStyles]);
 
-  // Compute all live computed CSS properties
-  const computedStyles = useMemo<Record<string, string>>(() => {
-    if (!selectedElement) return {};
-    const win = selectedElement.ownerDocument?.defaultView || window;
-    const computed = win.getComputedStyle(selectedElement);
-    const result: Record<string, string> = {};
-    for (let i = 0; i < computed.length; i++) {
-      const prop = computed[i];
-      const val = computed.getPropertyValue(prop);
-      if (val && !prop.startsWith("-webkit-")) {
-        result[prop] = val;
-      }
-    }
-    return result;
-  }, [selectedElement, inlineStyles]);
-
   const getElementMetrics = () => {
     if (!selectedElement) {
       return {
@@ -154,32 +166,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   const metrics = getElementMetrics();
   const tagName = selectedElement?.tagName.toLowerCase() || "element";
 
-  const handleAddCustomProp = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newProp.trim() && newVal.trim()) {
-      onUpdateStyle(newProp.trim(), newVal.trim());
-      setNewProp("");
-      setNewVal("");
-      setIsAddingRule(false);
-    }
-  };
-
-  const handleArrowKeyStep = (e: React.KeyboardEvent<HTMLInputElement>, prop: string, val: string) => {
-    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-    e.preventDefault();
-
-    const step = e.shiftKey ? 10 : (e.altKey ? 0.1 : 1);
-    const match = val.match(/^([+-]?[\d.]+)(.*)$/);
-    if (!match) return;
-
-    const num = parseFloat(match[1]);
-    const unit = match[2] || "px";
-    const newNum = e.key === "ArrowUp" ? num + step : num - step;
-    const rounded = Math.round(newNum * 100) / 100;
-
-    onUpdateStyle(prop, `${rounded}${unit}`);
-  };
-
   const toHexColor = (colorStr?: string) => {
     if (!colorStr) return "#0f172a";
     if (colorStr.startsWith("#")) {
@@ -205,33 +191,66 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     });
   }, [inlineStyles, filterText]);
 
-  const filteredComputedProps = useMemo(() => {
-    return Object.entries(computedStyles).filter(([prop, val]) => {
-      if (!filterText) return true;
-      return prop.toLowerCase().includes(filterText.toLowerCase()) || val.toLowerCase().includes(filterText.toLowerCase());
-    });
-  }, [computedStyles, filterText]);
+  // Generate suggestions for active field with current value placed at top
+  const activeSuggestions = useMemo(() => {
+    if (!focusedField) return [];
+    if (focusedField.type === "prop") {
+      const q = (focusedField.id === "new" ? newProp : "").toLowerCase();
+      return CSS_PROPERTY_SUGGESTIONS.filter((p) => !q || p.includes(q));
+    }
+    if (focusedField.type === "val" && focusedField.propName) {
+      const prop = focusedField.propName.toLowerCase();
+      const currentVal = (inlineStyles[prop] || "").toLowerCase().trim();
+      const options = CSS_VALUE_SUGGESTIONS[prop] || [];
+      const q = (focusedField.id === "new" ? newVal : "").toLowerCase().trim();
 
-  const getDatalistId = (prop: string) => {
-    return CSS_VALUE_SUGGESTIONS[prop] ? `datalist-${prop}` : undefined;
+      // Put the current value first if available
+      let sorted = [...options];
+      if (currentVal && sorted.includes(currentVal)) {
+        sorted = [currentVal, ...sorted.filter((v) => v !== currentVal)];
+      }
+
+      if (!q) return sorted;
+      return sorted.filter((v) => v.toLowerCase().includes(q));
+    }
+    return [];
+  }, [focusedField, newProp, newVal, inlineStyles]);
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [activeSuggestions.length]);
+
+  const handleArrowKeyStep = (e: React.KeyboardEvent<HTMLInputElement>, prop: string, val: string) => {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const match = val.match(/^([+-]?[\d.]+)(.*)$/);
+      if (match) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : (e.altKey ? 0.1 : 1);
+        const num = parseFloat(match[1]);
+        const unit = match[2] || "px";
+        const newNum = e.key === "ArrowUp" ? num + step : num - step;
+        const rounded = Math.round(newNum * 100) / 100;
+        onUpdateStyle(prop, `${rounded}${unit}`);
+      }
+    }
+  };
+
+  const handleCommitNewProp = () => {
+    if (newProp.trim() && newVal.trim()) {
+      onUpdateStyle(newProp.trim(), newVal.trim());
+      setNewProp("");
+      setNewVal("");
+      // Focus new empty property input immediately (DevTools style)
+      setTimeout(() => {
+        newPropInputRef.current?.focus();
+      }, 50);
+    } else if (newProp.trim() && !newVal.trim()) {
+      newValInputRef.current?.focus();
+    }
   };
 
   return (
     <div className="style-inspector-container">
-      {/* Global CSS Native Datalists */}
-      <datalist id="css-property-list">
-        {CSS_PROPERTY_SUGGESTIONS.map((p) => (
-          <option key={p} value={p} />
-        ))}
-      </datalist>
-      {Object.entries(CSS_VALUE_SUGGESTIONS).map(([prop, values]) => (
-        <datalist key={prop} id={`datalist-${prop}`}>
-          {values.map((v) => (
-            <option key={v} value={v} />
-          ))}
-        </datalist>
-      ))}
-
       {/* Chrome DevTools Filter & Action Bar */}
       <div className="devtools-filter-bar">
         <div className="filter-input-wrapper">
@@ -248,7 +267,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
           <button className="tool-btn">.cls</button>
           <button 
             className="tool-btn" 
-            onClick={() => setIsAddingRule(true)}
+            onClick={() => newPropInputRef.current?.focus()}
             title="New Style Rule (+)"
           >
             <Plus size={13} />
@@ -262,28 +281,121 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
         </div>
       </div>
 
-      {/* 1. STYLES TAB (Exact Chrome DevTools Look & Feel) */}
-      {activeTab === "styles" && (
-        <div className="styles-scroll-pane">
-          {/* element.style Rule Block */}
-          <div className="css-rule-block">
-            <div className="rule-header">
-              <span className="selector-text">element.style</span>
-              <span className="rule-source">{"{"}</span>
-            </div>
-            <div className="rule-properties-list">
-              {filteredInlineProps.map(([prop, val]) => (
-                <div key={prop} className="css-prop-row">
+      {/* STYLES PANE */}
+      <div className="styles-scroll-pane">
+        {/* element.style Rule Block */}
+        <div className="css-rule-block">
+          <div className="rule-header">
+            <span className="selector-text">element.style</span>
+            <span className="rule-source">{"{"}</span>
+          </div>
+
+          <div className="rule-properties-list">
+            {filteredInlineProps.map(([prop, val], idx) => {
+              const isPropDisabled = disabledProps.has(prop);
+              return (
+                <div key={prop} className={`css-prop-row ${isPropDisabled ? "disabled" : ""}`} style={{ position: "relative" }}>
                   <input
                     type="checkbox"
-                    checked={true}
+                    checked={!isPropDisabled}
                     onChange={(e) => {
-                      if (!e.target.checked) onRemoveStyle(prop);
+                      if (e.target.checked) {
+                        setDisabledProps((prev) => {
+                          const next = new Set(prev);
+                          next.delete(prop);
+                          return next;
+                        });
+                        onUpdateStyle(prop, val);
+                      } else {
+                        setDisabledProps((prev) => {
+                          const next = new Set(prev);
+                          next.add(prop);
+                          return next;
+                        });
+                        onRemoveStyle(prop);
+                      }
                     }}
                     title="Toggle Property"
                   />
-                  <span className="prop-name">{prop}:</span>
-                  <span className="prop-val">
+                  
+                  {/* Editable Property Name */}
+                  <span className="prop-name" style={{ position: "relative" }}>
+                    <input
+                      type="text"
+                      className="devtools-prop-input"
+                      value={prop}
+                      style={{
+                        color: isPropDisabled ? "#94a3b8" : "#c026d3",
+                        width: `${Math.max(prop.length, 5)}ch`,
+                      }}
+                      onFocus={() => handleFieldFocus({ id: prop, type: "prop" })}
+                      onBlur={handleFieldBlur}
+                      onChange={(e) => {
+                        const newP = e.target.value;
+                        if (newP !== prop) {
+                          if (onRenameStyle) {
+                            onRenameStyle(prop, newP, val);
+                          } else {
+                            onRemoveStyle(prop);
+                            if (newP.trim()) onUpdateStyle(newP.trim(), val);
+                          }
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        const isDropdownOpen = focusedField?.id === prop && focusedField?.type === "prop" && activeSuggestions.length > 0;
+                        if (isDropdownOpen && e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setHighlightedIndex((prev) => (prev + 1) % activeSuggestions.length);
+                        } else if (isDropdownOpen && e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setHighlightedIndex((prev) => (prev - 1 + activeSuggestions.length) % activeSuggestions.length);
+                        } else if (e.key === "Enter" || e.key === ":" || e.key === "Tab") {
+                          e.preventDefault();
+                          if (isDropdownOpen && activeSuggestions[highlightedIndex]) {
+                            const chosenProp = activeSuggestions[highlightedIndex];
+                            if (onRenameStyle) {
+                              onRenameStyle(prop, chosenProp, val);
+                            } else {
+                              onRemoveStyle(prop);
+                              onUpdateStyle(chosenProp, val);
+                            }
+                          }
+                          setFocusedField(null);
+                          const nextValInput = (e.currentTarget.parentElement?.nextElementSibling?.querySelector(".devtools-val-input") as HTMLInputElement);
+                          nextValInput?.focus();
+                        } else if (e.key === "Escape") {
+                          setFocusedField(null);
+                        }
+                      }}
+                    />
+                    :
+
+                    {/* Compact Suggestions Popup for Existing Row Property */}
+                    {focusedField?.id === prop && focusedField.type === "prop" && activeSuggestions.length > 0 && (
+                      <div className="devtools-compact-dropdown" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                        {activeSuggestions.slice(0, 8).map((sug, sIdx) => (
+                          <div
+                            key={sug}
+                            className={`devtools-compact-item ${sIdx === highlightedIndex ? "active" : ""}`}
+                            onClick={() => {
+                              if (onRenameStyle) {
+                                onRenameStyle(prop, sug, val);
+                              } else {
+                                onRemoveStyle(prop);
+                                onUpdateStyle(sug, val);
+                              }
+                              setFocusedField(null);
+                            }}
+                          >
+                            <span>{sug}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </span>
+
+                  {/* Editable Value */}
+                  <span className="prop-val" style={{ position: "relative" }}>
                     {(val.startsWith("#") || val.startsWith("rgb")) && (
                       <span
                         className="color-swatch"
@@ -306,137 +418,277 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                     )}
                     <input
                       type="text"
-                      list={getDatalistId(prop)}
+                      className="devtools-val-input"
                       value={val}
+                      style={{
+                        color: isPropDisabled ? "#94a3b8" : "#2563eb",
+                        width: `${Math.max(val.length + 1, 5)}ch`,
+                      }}
+                      onFocus={() => handleFieldFocus({ id: prop, type: "val", propName: prop })}
+                      onBlur={handleFieldBlur}
                       onChange={(e) => onUpdateStyle(prop, e.target.value)}
+                      onKeyDown={(e) => {
+                        const isDropdownOpen = focusedField?.id === prop && focusedField?.type === "val" && activeSuggestions.length > 0;
+                        if (isDropdownOpen && e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setHighlightedIndex((prev) => (prev + 1) % activeSuggestions.length);
+                        } else if (isDropdownOpen && e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setHighlightedIndex((prev) => (prev - 1 + activeSuggestions.length) % activeSuggestions.length);
+                        } else if (e.key === "Enter" || e.key === ";" || (e.key === "Tab" && !e.shiftKey)) {
+                          e.preventDefault();
+                          if (isDropdownOpen && activeSuggestions[highlightedIndex]) {
+                            onUpdateStyle(prop, activeSuggestions[highlightedIndex]);
+                          }
+                          setFocusedField(null);
+                          if (idx === filteredInlineProps.length - 1) {
+                            newPropInputRef.current?.focus();
+                          } else {
+                            const nextRow = e.currentTarget.closest(".css-prop-row")?.nextElementSibling;
+                            const nextInput = nextRow?.querySelector(".devtools-prop-input") as HTMLInputElement;
+                            nextInput ? nextInput.focus() : newPropInputRef.current?.focus();
+                          }
+                        } else if (e.key === "Escape") {
+                          setFocusedField(null);
+                        } else if (!isDropdownOpen) {
+                          handleArrowKeyStep(e, prop, val);
+                        }
+                      }}
+                    />
+
+                    {/* Compact Suggestions Popup for Existing Row Value */}
+                    {focusedField?.id === prop && focusedField.type === "val" && activeSuggestions.length > 0 && (
+                      <div className="devtools-compact-dropdown" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                        {activeSuggestions.map((sug, sIdx) => (
+                          <div
+                            key={sug}
+                            className={`devtools-compact-item ${sIdx === highlightedIndex ? "active" : ""}`}
+                            onClick={() => {
+                              onUpdateStyle(prop, sug);
+                              setFocusedField(null);
+                            }}
+                          >
+                            <span>{sug}</span>
+                            {sug.toLowerCase() === val.toLowerCase() && (
+                              <span className="current-badge">current</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </span>
+                  <span className="prop-semi">;</span>
+                </div>
+              );
+            })}
+
+            {/* Permanent New Property Row (Exact Chrome DevTools bottom input) */}
+            <div className="css-prop-row new-row" style={{ position: "relative" }}>
+              <input type="checkbox" checked={false} disabled style={{ opacity: 0.3 }} />
+              
+              {/* New Property Input */}
+              <span className="prop-name" style={{ position: "relative" }}>
+                <input
+                  ref={newPropInputRef}
+                  type="text"
+                  className="devtools-prop-input"
+                  placeholder="property"
+                  value={newProp}
+                  style={{
+                    color: "#c026d3",
+                    width: "88px",
+                  }}
+                  onFocus={() => handleFieldFocus({ id: "new", type: "prop" })}
+                  onBlur={handleFieldBlur}
+                  onChange={(e) => setNewProp(e.target.value)}
+                  onKeyDown={(e) => {
+                    const isDropdownOpen = focusedField?.id === "new" && focusedField?.type === "prop" && activeSuggestions.length > 0;
+                    if (isDropdownOpen && e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setHighlightedIndex((prev) => (prev + 1) % activeSuggestions.length);
+                    } else if (isDropdownOpen && e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setHighlightedIndex((prev) => (prev - 1 + activeSuggestions.length) % activeSuggestions.length);
+                    } else if (e.key === "Enter" || e.key === ":" || e.key === "Tab") {
+                      e.preventDefault();
+                      if (isDropdownOpen && activeSuggestions[highlightedIndex]) {
+                        setNewProp(activeSuggestions[highlightedIndex]);
+                      }
+                      setFocusedField(null);
+                      newValInputRef.current?.focus();
+                    } else if (e.key === "Escape") {
+                      setFocusedField(null);
+                    }
+                  }}
+                />
+                :
+
+                {/* Compact Property Suggestions */}
+                {focusedField?.id === "new" && focusedField.type === "prop" && activeSuggestions.length > 0 && (
+                  <div className="devtools-compact-dropdown" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                    {activeSuggestions.slice(0, 8).map((sug, sIdx) => (
+                      <div
+                        key={sug}
+                        className={`devtools-compact-item ${sIdx === highlightedIndex ? "active" : ""}`}
+                        onClick={() => {
+                          setNewProp(sug);
+                          setFocusedField(null);
+                          newValInputRef.current?.focus();
+                        }}
+                      >
+                        {sug}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </span>
+
+              {/* New Value Input */}
+              <span className="prop-val" style={{ position: "relative" }}>
+                <input
+                  ref={newValInputRef}
+                  type="text"
+                  className="devtools-val-input"
+                  placeholder="value"
+                  value={newVal}
+                  style={{
+                    color: "#2563eb",
+                    width: "110px",
+                  }}
+                  onFocus={() => handleFieldFocus({ id: "new", type: "val", propName: newProp })}
+                  onBlur={handleFieldBlur}
+                  onChange={(e) => setNewVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    const isDropdownOpen = focusedField?.id === "new" && focusedField?.type === "val" && activeSuggestions.length > 0;
+                    if (isDropdownOpen && e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setHighlightedIndex((prev) => (prev + 1) % activeSuggestions.length);
+                    } else if (isDropdownOpen && e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setHighlightedIndex((prev) => (prev - 1 + activeSuggestions.length) % activeSuggestions.length);
+                    } else if (e.key === "Enter" || e.key === ";" || e.key === "Tab") {
+                      e.preventDefault();
+                      if (isDropdownOpen && activeSuggestions[highlightedIndex] && !newVal) {
+                        onUpdateStyle(newProp.trim(), activeSuggestions[highlightedIndex]);
+                        setNewProp("");
+                        setNewVal("");
+                        setFocusedField(null);
+                        setTimeout(() => newPropInputRef.current?.focus(), 50);
+                      } else {
+                        setFocusedField(null);
+                        handleCommitNewProp();
+                      }
+                    } else if (e.key === "Escape") {
+                      setFocusedField(null);
+                    }
+                  }}
+                />
+                ;
+
+                {/* Compact Value Suggestions */}
+                {focusedField?.id === "new" && focusedField.type === "val" && activeSuggestions.length > 0 && (
+                  <div className="devtools-compact-dropdown" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                    {activeSuggestions.map((sug, sIdx) => (
+                      <div
+                        key={sug}
+                        className={`devtools-compact-item ${sIdx === highlightedIndex ? "active" : ""}`}
+                        onClick={() => {
+                          onUpdateStyle(newProp.trim(), sug);
+                          setNewProp("");
+                          setNewVal("");
+                          setFocusedField(null);
+                          setTimeout(() => newPropInputRef.current?.focus(), 50);
+                        }}
+                      >
+                        {sug}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </span>
+            </div>
+          </div>
+
+          <div className="rule-footer">{"}"}</div>
+        </div>
+
+        {/* Matched Rules from Stylesheet */}
+        {matchedRules.map((rule, rIdx) => (
+          <div key={rIdx} className="css-rule-block">
+            <div className="rule-header">
+              <span className="selector-text">{rule.selector}</span>
+              <span className="rule-source">{rule.source}</span>
+            </div>
+            <div className="rule-properties-list">
+              {Object.entries(rule.properties).map(([prop, val]) => (
+                <div key={prop} className="css-prop-row">
+                  <span className="prop-name">{prop}:</span>
+                  <span className="prop-val">
+                    {(val.startsWith("#") || val.startsWith("rgb")) && (
+                      <span
+                        className="color-swatch"
+                        style={{ backgroundColor: toHexColor(val), position: "relative", cursor: "pointer" }}
+                      >
+                        <input
+                          type="color"
+                          value={toHexColor(val)}
+                          onChange={(e) => {
+                            rule.styleDeclaration.setProperty(prop, e.target.value);
+                            onUpdateStyle(prop, e.target.value);
+                          }}
+                          style={{
+                            opacity: 0,
+                            position: "absolute",
+                            inset: 0,
+                            width: "100%",
+                            height: "100%",
+                            cursor: "pointer",
+                          }}
+                        />
+                      </span>
+                    )}
+                    <input
+                      type="text"
+                      value={val}
+                      onChange={(e) => {
+                        rule.styleDeclaration.setProperty(prop, e.target.value);
+                        onUpdateStyle(prop, e.target.value);
+                      }}
                       onKeyDown={(e) => handleArrowKeyStep(e, prop, val)}
+                      style={{
+                        border: "1px solid transparent",
+                        background: "transparent",
+                        color: "#2563eb",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "11px",
+                        outline: "none",
+                      }}
                     />
                   </span>
                   <span className="prop-semi">;</span>
                 </div>
               ))}
-
-              {isAddingRule && (
-                <form className="add-rule-form" onSubmit={handleAddCustomProp} style={{ display: "flex", alignItems: "center", gap: "2px", marginTop: "2px" }}>
-                  <input
-                    type="text"
-                    list="css-property-list"
-                    placeholder="property"
-                    value={newProp}
-                    onChange={(e) => setNewProp(e.target.value)}
-                    autoFocus
-                    style={{ border: "1px solid #3b82f6", background: "#ffffff", padding: "1px 4px", fontSize: "11px", width: "100px", outline: "none" }}
-                  />
-                  <span>:</span>
-                  <input
-                    type="text"
-                    list={getDatalistId(newProp)}
-                    placeholder="value"
-                    value={newVal}
-                    onChange={(e) => setNewVal(e.target.value)}
-                    style={{ border: "1px solid #3b82f6", background: "#ffffff", padding: "1px 4px", fontSize: "11px", flex: 1, outline: "none" }}
-                  />
-                  <span>;</span>
-                  <button type="submit" style={{ display: "none" }} />
-                </form>
-              )}
             </div>
             <div className="rule-footer">{"}"}</div>
           </div>
+        ))}
 
-          {/* Matched Rules from Stylesheet */}
-          {matchedRules.map((rule, rIdx) => (
-            <div key={rIdx} className="css-rule-block">
-              <div className="rule-header">
-                <span className="selector-text">{rule.selector}</span>
-                <span className="rule-source">{rule.source}</span>
-              </div>
-              <div className="rule-properties-list">
-                {Object.entries(rule.properties).map(([prop, val]) => (
-                  <div key={prop} className="css-prop-row">
-                    <span className="prop-name">{prop}:</span>
-                    <span className="prop-val">
-                      {(val.startsWith("#") || val.startsWith("rgb")) && (
-                        <span
-                          className="color-swatch"
-                          style={{ backgroundColor: toHexColor(val), position: "relative", cursor: "pointer" }}
-                        >
-                          <input
-                            type="color"
-                            value={toHexColor(val)}
-                            onChange={(e) => {
-                              rule.styleDeclaration.setProperty(prop, e.target.value);
-                              onUpdateStyle(prop, e.target.value);
-                            }}
-                            style={{
-                              opacity: 0,
-                              position: "absolute",
-                              inset: 0,
-                              width: "100%",
-                              height: "100%",
-                              cursor: "pointer",
-                            }}
-                          />
-                        </span>
-                      )}
-                      <input
-                        type="text"
-                        list={getDatalistId(prop)}
-                        value={val}
-                        onChange={(e) => {
-                          rule.styleDeclaration.setProperty(prop, e.target.value);
-                          onUpdateStyle(prop, e.target.value);
-                        }}
-                        onKeyDown={(e) => handleArrowKeyStep(e, prop, val)}
-                      />
-                    </span>
-                    <span className="prop-semi">;</span>
-                  </div>
-                ))}
-              </div>
-              <div className="rule-footer">{"}"}</div>
-            </div>
-          ))}
-
-          {/* User Agent Stylesheet Simulation Block */}
-          <div className="css-rule-block">
-            <div className="rule-header">
-              <span className="selector-text">{tagName}</span>
-              <span className="rule-source">user agent stylesheet</span>
-            </div>
-            <div className="rule-properties-list user-agent">
-              <div className="css-prop-row"><span className="prop-name">display:</span> <span className="prop-val">block;</span></div>
-              <div className="css-prop-row"><span className="prop-name">box-sizing:</span> <span className="prop-val">border-box;</span></div>
-            </div>
-            <div className="rule-footer">{"}"}</div>
+        {/* User Agent Stylesheet Simulation Block */}
+        <div className="css-rule-block">
+          <div className="rule-header">
+            <span className="selector-text">{tagName}</span>
+            <span className="rule-source">user agent stylesheet</span>
           </div>
-
-          {/* Box Model Diagram */}
-          <BoxModel {...metrics} />
-        </div>
-      )}
-
-      {/* 2. COMPUTED TAB */}
-      {activeTab === "computed" && (
-        <div className="styles-scroll-pane">
-          <BoxModel {...metrics} />
-          <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "2px" }}>
-            {filteredComputedProps.map(([prop, val]) => (
-              <div key={prop} className="css-prop-row" style={{ justifyContent: "space-between", borderBottom: "1px solid #f8fafc", padding: "3px 0" }}>
-                <span className="prop-name" style={{ color: "#64748b", fontWeight: 600 }}>{prop}</span>
-                <span className="prop-val" style={{ color: "#0f172a" }}>{val}</span>
-              </div>
-            ))}
+          <div className="rule-properties-list user-agent">
+            <div className="css-prop-row"><span className="prop-name">display:</span> <span className="prop-val">block;</span></div>
+            <div className="css-prop-row"><span className="prop-name">box-sizing:</span> <span className="prop-val">border-box;</span></div>
           </div>
+          <div className="rule-footer">{"}"}</div>
         </div>
-      )}
 
-      {/* 3. LAYOUT TAB */}
-      {activeTab === "layout" && (
-        <div className="styles-scroll-pane">
-          <BoxModel {...metrics} />
-        </div>
-      )}
+        {/* Box Model Diagram */}
+        <BoxModel {...metrics} />
+      </div>
     </div>
   );
 };
