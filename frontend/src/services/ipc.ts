@@ -69,6 +69,7 @@ declare global {
     extractPdf?: (args: { path: string; email_width?: number; target_page?: number; marked_regions?: MarkedRegion[] }) => Promise<{ success: boolean; error?: string } & Partial<PDFExtractionData>>;
     compileMjml?: (args: { mjml: string; save_path?: string }) => Promise<{ success: boolean; html?: string; characters?: number; error?: string }>;
     saveFile?: (args: { path: string; content: string }) => Promise<{ success: boolean; error?: string }>;
+    readFile?: (args: { path: string }) => Promise<{ success: boolean; content?: string; error?: string }>;
     getInstalledBrowsers?: () => Promise<{ success: boolean; browsers?: BrowserInfo[] }>;
     openInBrowser?: (args: { url?: string; path?: string; browser_path?: string }) => Promise<{ success: boolean; error?: string }>;
   }
@@ -246,6 +247,13 @@ export const nativeIPC = {
       return res.success;
     }
     return true;
+  },
+
+  async readFile(path: string): Promise<{ success: boolean; content?: string; error?: string }> {
+    if (window.readFile) {
+      return await window.readFile({ path });
+    }
+    return { success: false, error: "Not supported in browser mock" };
   },
 
   async getInstalledBrowsers(): Promise<BrowserInfo[]> {

@@ -12,17 +12,76 @@ import {
   CheckCircle2,
   SlidersHorizontal,
   ChevronRight,
-  Crop
+  Crop,
+  Bot
 } from "lucide-react";
-import { nativeIPC, MarkedRegion, FooterPreset } from "../services/ipc";
+import { nativeIPC, MarkedRegion, FooterPreset, PDFExtractionData } from "../services/ipc";
 import { PdfMarkingModal } from "../components/PdfMarkingModal";
+import { BrowserSelectModal } from "../components/BrowserSelectModal";
 
 interface Screen1Props {
   onPdfSelected: (path: string, targetPage?: number, emailWidth?: number, markedRegions?: MarkedRegion[], selectedFooter?: FooterPreset | null) => void;
   onHtmlLoaded: (path: string, content: string) => void;
+  onResumeProcess?: (params: {
+    pdfPath: string;
+    targetPage?: number;
+    emailWidth?: number;
+    extractData: PDFExtractionData;
+    mjmlText?: string;
+    generatedHtml?: string;
+  }) => void;
 }
 
-export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLoaded }) => {
+export interface RecentProject {
+  id: string;
+  name: string;
+  path: string;
+  type: "pdf" | "html";
+  timestamp: number;
+  package_dir?: string;
+  target_page?: number;
+  email_width?: number;
+}
+
+const getRecentProjectsFromStorage = (): RecentProject[] => {
+  try {
+    const raw = localStorage.getItem("nocodemail_recent_projects");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+};
+
+const saveRecentProjectToStorage = (item: {
+  name: string;
+  path: string;
+  type: "pdf" | "html";
+  package_dir?: string;
+  target_page?: number;
+  email_width?: number;
+}) => {
+  try {
+    const current = getRecentProjectsFromStorage().filter((p) => p.path !== item.path);
+    const updated: RecentProject[] = [
+      {
+        id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        name: item.name,
+        path: item.path,
+        type: item.type,
+        timestamp: Date.now(),
+        package_dir: item.package_dir,
+        target_page: item.target_page,
+        email_width: item.email_width,
+      },
+      ...current,
+    ];
+    localStorage.setItem("nocodemail_recent_projects", JSON.stringify(updated.slice(0, 15)));
+  } catch {}
+};
+
+export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLoaded, onResumeProcess }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [loadingHtml, setLoadingHtml] = useState(false);
@@ -30,18 +89,26 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
   // iOS Glass Modal State
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showMarkingModal, setShowMarkingModal] = useState(false);
+  const [showRecentModal, setShowRecentModal] = useState(false);
+  const [showBrowserModal, setShowBrowserModal] = useState(false);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [modalPdfPath, setModalPdfPath] = useState<string | null>(null);
   const [totalPages, setTotalPages] = useState<number>(1);
-  const [extractSinglePage, setExtractSinglePage] = useState<boolean>(false);
+  const [extractSinglePage, setExtractSinglePage] = useState<boolean>(true); // Enabled by default for all PDFs
   const [selectedPage, setSelectedPage] = useState<number>(1);
   const [selectedEmailWidth, setSelectedEmailWidth] = useState<number>(700);
   const [modalDragging, setModalDragging] = useState(false);
+
+  // Load recents on mount and when opening modal
+  const refreshRecentProjects = () => {
+    setRecentProjects(getRecentProjectsFromStorage());
+  };
 
   const handleOpenPdfModal = () => {
     setShowPdfModal(true);
     setModalPdfPath(null);
     setTotalPages(1);
-    setExtractSinglePage(false);
+    setExtractSinglePage(true);
     setSelectedPage(1);
     setSelectedEmailWidth(700);
   };
@@ -52,18 +119,46 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
       const res = await nativeIPC.choosePdf();
       if (res.success && res.path) {
         setModalPdfPath(res.path);
+        const name = res.path.split(/[/\\]/).pop() || "email-design.pdf";
+        saveRecentProjectToStorage({ name, path: res.path, type: "pdf" });
+        refreshRecentProjects();
+
         // Query total pages
         const info = await nativeIPC.getPdfInfo(res.path);
         setTotalPages(info.total_pages || 1);
         setSelectedPage(1);
-        if ((info.total_pages || 1) > 1) {
-          setExtractSinglePage(true);
-        }
+        setExtractSinglePage(true); // Always enabled by default
       }
     } catch (e) {
       console.error(e);
     } finally {
       setLoadingPdf(false);
+    }
+  };
+
+  const handleOpenMjmlAgent = () => {
+    const savedBrowser = localStorage.getItem("nocodemail_agent_browser");
+    if (!savedBrowser) {
+      setShowBrowserModal(true);
+    } else {
+      const url = import.meta.env.VITE_MJML_AGENT_URL || "";
+      if (url) {
+        nativeIPC.openInBrowser({ url, browser_path: savedBrowser });
+      }
+    }
+  };
+
+  const handleMjmlAgentContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setShowBrowserModal(true);
+  };
+
+  const handleSelectAgentBrowser = (browserPath: string) => {
+    localStorage.setItem("nocodemail_agent_browser", browserPath);
+    setShowBrowserModal(false);
+    const url = import.meta.env.VITE_MJML_AGENT_URL || "";
+    if (url) {
+      nativeIPC.openInBrowser({ url, browser_path: browserPath });
     }
   };
 
@@ -77,16 +172,20 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
   const handleMarkingModalConfirm = (markedRegions: MarkedRegion[], selectedFooter: FooterPreset | null) => {
     if (!modalPdfPath) return;
     const targetP = extractSinglePage ? selectedPage : 1;
+    const name = modalPdfPath.split(/[/\\]/).pop() || "email-design.pdf";
+    saveRecentProjectToStorage({ name, path: modalPdfPath, type: "pdf", target_page: targetP, email_width: selectedEmailWidth });
     setShowMarkingModal(false);
     onPdfSelected(modalPdfPath, targetP, selectedEmailWidth, markedRegions, selectedFooter);
   };
-
 
   const handleChooseHtml = async () => {
     try {
       setLoadingHtml(true);
       const res = await nativeIPC.chooseHtml();
       if (res.success && res.path && res.content) {
+        const name = res.path.split(/[/\\]/).pop() || "campaign.html";
+        saveRecentProjectToStorage({ name, path: res.path, type: "html" });
+        refreshRecentProjects();
         onHtmlLoaded(res.path, res.content);
       }
     } catch (e) {
@@ -94,6 +193,147 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
     } finally {
       setLoadingHtml(false);
     }
+  };
+
+  const handleResumeRecent = async (proj: RecentProject) => {
+    setShowRecentModal(false);
+
+    // Compute package directory dynamically if not explicitly stored
+    const normPath = proj.path.replace(/\//g, "\\");
+    const lastSlash = normPath.lastIndexOf("\\");
+    const parentDir = lastSlash === -1 ? "." : normPath.substring(0, lastSlash);
+    const filename = lastSlash === -1 ? normPath : normPath.substring(lastSlash + 1);
+    const baseName = filename.replace(/\.[^/.]+$/, "");
+    const packageDir = proj.package_dir || `${parentDir}\\${baseName}_ai_package`;
+    const targetPage = proj.target_page || 1;
+    const emailWidth = proj.email_width || 700;
+
+    const jsonPath = `${packageDir}\\${baseName}_design.json`;
+    const mjmlPath = `${packageDir}\\${baseName}.mjml`;
+    const htmlPath = `${packageDir}\\${baseName}.html`;
+
+    try {
+      setLoadingPdf(true);
+      const [resJson, resMjml, resHtml] = await Promise.all([
+        nativeIPC.readFile(jsonPath),
+        nativeIPC.readFile(mjmlPath),
+        nativeIPC.readFile(htmlPath),
+      ]);
+
+      if (resJson.success && resJson.content) {
+        let totalPages = 1;
+        let totalImages = 0;
+        let totalLinks = 0;
+        let totalTables = 0;
+        let totalStyles = 0;
+        let totalTextBlocks = 0;
+
+        try {
+          const parsed = JSON.parse(resJson.content);
+          totalPages = parsed.total_pages || 1;
+          if (Array.isArray(parsed.pages)) {
+            for (const p of parsed.pages) {
+              if (Array.isArray(p.elements)) {
+                for (const el of p.elements) {
+                  if (el.type === "image") totalImages++;
+                  else if (el.type === "text_block") totalTextBlocks++;
+                }
+              }
+            }
+          }
+        } catch {}
+
+        const extractData: PDFExtractionData = {
+          package_dir: packageDir,
+          json_path: jsonPath,
+          preview_image_path: `${packageDir}\\page_${targetPage}_preview.png`,
+          preview_image_filename: `page_${targetPage}_preview.png`,
+          total_pages: totalPages,
+          total_text_blocks: totalTextBlocks,
+          total_images: totalImages,
+          total_links: totalLinks,
+          total_tables: totalTables,
+          total_styles: totalStyles,
+          design_json: resJson.content,
+        };
+
+        if (onResumeProcess) {
+          onResumeProcess({
+            pdfPath: proj.path,
+            targetPage,
+            emailWidth,
+            extractData,
+            mjmlText: resMjml.content || "",
+            generatedHtml: resHtml.content || "",
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Resume error:", e);
+    } finally {
+      setLoadingPdf(false);
+    }
+
+    // Direct transition to Screen 2 Studio if package files were moved
+    onPdfSelected(proj.path, targetPage, emailWidth, [], null);
+  };
+
+  const handleOpenRemark = async (proj: RecentProject) => {
+    setShowRecentModal(false);
+    setModalPdfPath(proj.path);
+    setShowPdfModal(true);
+    try {
+      const info = await nativeIPC.getPdfInfo(proj.path);
+      setTotalPages(info.total_pages || 1);
+      setSelectedPage(proj.target_page || 1);
+      if ((info.total_pages || 1) > 1) {
+        setExtractSinglePage(true);
+      }
+    } catch {
+      setTotalPages(1);
+    }
+  };
+
+  const handleSelectRecent = async (proj: RecentProject) => {
+    if (proj.type === "pdf") {
+      if (proj.package_dir) {
+        handleResumeRecent(proj);
+      } else {
+        handleOpenRemark(proj);
+      }
+    } else if (proj.type === "html") {
+      setShowRecentModal(false);
+      try {
+        setLoadingHtml(true);
+        const res = await nativeIPC.readFile(proj.path);
+        if (res.success && res.content) {
+          onHtmlLoaded(proj.path, res.content);
+        } else {
+          handleChooseHtml();
+        }
+      } catch (e) {
+        console.error("Failed to load recent HTML:", e);
+      } finally {
+        setLoadingHtml(false);
+      }
+    }
+  };
+
+  const handleDeleteRecent = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const updated = recentProjects.filter((p) => p.id !== id);
+      localStorage.setItem("nocodemail_recent_projects", JSON.stringify(updated));
+      setRecentProjects(updated);
+    } catch {}
+  };
+
+  const handleClearAllRecents = () => {
+    try {
+      localStorage.removeItem("nocodemail_recent_projects");
+      setRecentProjects([]);
+    } catch {}
   };
 
   const handleDropOnModal = async (e: React.DragEvent) => {
@@ -108,9 +348,7 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
           const info = await nativeIPC.getPdfInfo(file.name);
           setTotalPages(info.total_pages || 1);
           setSelectedPage(1);
-          if ((info.total_pages || 1) > 1) {
-            setExtractSinglePage(true);
-          }
+          setExtractSinglePage(true);
         } catch {
           setTotalPages(1);
         }
@@ -130,9 +368,7 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
         nativeIPC.getPdfInfo(file.name).then(info => {
           setTotalPages(info.total_pages || 1);
           setSelectedPage(1);
-          if ((info.total_pages || 1) > 1) {
-            setExtractSinglePage(true);
-          }
+          setExtractSinglePage(true);
         }).catch(() => setTotalPages(1));
       } else if (file.name.endsWith(".html") || file.name.endsWith(".htm")) {
         const reader = new FileReader();
@@ -146,12 +382,47 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
 
   return (
     <div className="screen1-container">
-      {/* Top Header Logo */}
-      <header className="brand-header">
+      {/* Top Header Logo & Actions */}
+      <header className="brand-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div className="brand-logo">
           <div className="logo-badge">N</div>
           <span className="logo-text">NoCodeMail</span>
         </div>
+
+        {/* MJML Agent Header Button */}
+        <button
+          type="button"
+          onClick={handleOpenMjmlAgent}
+          onContextMenu={handleMjmlAgentContextMenu}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "7px",
+            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+            color: "#ffffff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "7px 14px",
+            fontSize: "12.5px",
+            fontWeight: "700",
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(79, 70, 229, 0.3)",
+            transition: "all 0.15s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "translateY(-1px)";
+            e.currentTarget.style.boxShadow = "0 4px 14px rgba(79, 70, 229, 0.4)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "none";
+            e.currentTarget.style.boxShadow = "0 2px 8px rgba(79, 70, 229, 0.3)";
+          }}
+          title="Left-click: Open MJML AI Agent | Right-click: Change Preferred Browser"
+        >
+          <Sparkles size={14} />
+          <span>MJML Agent</span>
+          <ArrowRight size={13} />
+        </button>
       </header>
 
       {/* Screen 1 Main Content */}
@@ -451,11 +722,237 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
           <Lightbulb size={16} color="#eab308" />
           <span><strong>Tip:</strong> For best results, use high-quality PDFs with clear text and images.</span>
         </div>
-        <button className="footer-recent-btn" onClick={() => {}}>
+        <button 
+          type="button"
+          className="footer-recent-btn" 
+          onClick={() => {
+            refreshRecentProjects();
+            setShowRecentModal(true);
+          }}
+        >
           <Clock size={15} />
           <span>View Recent Projects</span>
         </button>
       </footer>
+
+      {/* Recent Projects Modal */}
+      {showRecentModal && (
+        <div className="ios-modal-overlay" onClick={() => setShowRecentModal(false)}>
+          <div 
+            className="ios-glass-modal" 
+            style={{ width: "620px", maxWidth: "92vw", maxHeight: "82vh", display: "flex", flexDirection: "column", animation: "modalSlideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="ios-modal-header" style={{ padding: "16px 20px", borderBottom: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: "#e0e7ff", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Clock size={17} color="#4f46e5" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>Recent Projects</h3>
+                  <p style={{ margin: 0, fontSize: "11.5px", color: "#64748b" }}>Quickly resume editing previous PDFs or exported emails</p>
+                </div>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setShowRecentModal(false)}
+                style={{ background: "transparent", border: "none", cursor: "pointer", color: "#64748b", padding: "4px" }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: "16px 20px", overflowY: "auto", flex: "1 1 auto", minHeight: "150px" }}>
+              {recentProjects.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {recentProjects.map((proj) => {
+                    const isPdf = proj.type === "pdf";
+                    const dateStr = new Date(proj.timestamp).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+
+                    return (
+                      <div
+                        key={proj.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "12px 16px",
+                          borderRadius: "10px",
+                          background: "#ffffff",
+                          border: "1px solid #e2e8f0",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+                          gap: "12px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: "1 1 auto" }}>
+                          <span
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: "6px",
+                              fontSize: "10.5px",
+                              fontWeight: "800",
+                              letterSpacing: "0.5px",
+                              background: isPdf ? "#f3e8ff" : "#e0f2fe",
+                              color: isPdf ? "#7c3aed" : "#0284c7",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {isPdf ? "PDF" : "HTML"}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: "13px", fontWeight: "700", color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={proj.name}>
+                              {proj.name}
+                            </div>
+                            <div style={{ fontSize: "11px", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={proj.path}>
+                              {proj.path} • {dateStr}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                          {isPdf ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleResumeRecent(proj)}
+                                style={{
+                                  padding: "6px 12px",
+                                  borderRadius: "6px",
+                                  fontSize: "11.5px",
+                                  fontWeight: "700",
+                                  background: "#4f46e5",
+                                  color: "#ffffff",
+                                  border: "none",
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "5px",
+                                  boxShadow: "0 2px 4px rgba(79, 70, 229, 0.25)",
+                                  transition: "background 0.15s ease",
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = "#4338ca")}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = "#4f46e5")}
+                                title="Resume Screen 2 directly with existing extracted assets, MJML & HTML"
+                              >
+                                <Sparkles size={13} />
+                                <span>Resume Studio</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenRemark(proj)}
+                                style={{
+                                  padding: "6px 10px",
+                                  borderRadius: "6px",
+                                  fontSize: "11.5px",
+                                  fontWeight: "600",
+                                  background: "#f8fafc",
+                                  color: "#475569",
+                                  border: "1px solid #cbd5e1",
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  transition: "background 0.15s ease",
+                                }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = "#f8fafc")}
+                                title="Choose pages and draw marked areas again"
+                              >
+                                <Crop size={13} />
+                                <span>Re-mark</span>
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectRecent(proj)}
+                              style={{
+                                padding: "6px 12px",
+                                borderRadius: "6px",
+                                fontSize: "11.5px",
+                                fontWeight: "700",
+                                background: "#0284c7",
+                                color: "#ffffff",
+                                border: "none",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                boxShadow: "0 2px 4px rgba(2, 132, 199, 0.25)",
+                              }}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = "#0369a1")}
+                              onMouseLeave={(e) => (e.currentTarget.style.background = "#0284c7")}
+                            >
+                              <span>Open Editor</span>
+                              <ChevronRight size={13} />
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteRecent(proj.id, e)}
+                            title="Remove from recents"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              cursor: "pointer",
+                              color: "#cbd5e1",
+                              padding: "4px",
+                              borderRadius: "4px",
+                              marginLeft: "4px",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
+                            onMouseLeave={(e) => (e.currentTarget.style.color = "#cbd5e1")}
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", padding: "40px 20px", color: "#64748b" }}>
+                  <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                    <Clock size={22} color="#94a3b8" />
+                  </div>
+                  <div style={{ fontSize: "14px", fontWeight: "700", color: "#334155", marginBottom: "4px" }}>No recent projects yet</div>
+                  <p style={{ fontSize: "12px", color: "#94a3b8", margin: 0 }}>
+                    Choose a PDF file or open an HTML email to get started.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {recentProjects.length > 0 && (
+              <div style={{ padding: "12px 20px", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "11px", color: "#94a3b8" }}>{recentProjects.length} recent item{recentProjects.length > 1 ? "s" : ""}</span>
+                <button
+                  type="button"
+                  onClick={handleClearAllRecents}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#ef4444",
+                    fontSize: "11.5px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    padding: "4px 8px",
+                  }}
+                >
+                  Clear History
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* iOS Liquid Glass PDF Import Modal */}
       {showPdfModal && (
@@ -535,91 +1032,96 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
                 )}
               </div>
 
-              {/* Target Email Container Width Selection (700px, 650px, 600px) */}
-              <div className="ios-settings-card">
-                <div className="ios-setting-row">
-                  <div className="ios-setting-info">
-                    <div className="ios-setting-title-row">
-                      <span className="ios-setting-label">Target Email Container Width</span>
-                    </div>
-                    <span className="ios-setting-sublabel">Includes standard 20px padding ({selectedEmailWidth - 40}px content width)</span>
-                  </div>
-                  <div className="ios-width-pill-group">
-                    {[700, 650, 600].map((w) => (
-                      <button
-                        key={w}
-                        type="button"
-                        className={`ios-width-pill ${selectedEmailWidth === w ? "active" : ""}`}
-                        onClick={() => setSelectedEmailWidth(w)}
-                      >
-                        <span className="pill-px-val">{w}px</span>
-                        {w === 700 && <span className="pill-rec-dot" title="Standard"></span>}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Page Number Selection Section */}
-              <div className="ios-settings-card">
-                <div className="ios-setting-row">
-                  <div className="ios-setting-info">
-                    <div className="ios-setting-title-row">
-                      <span className="ios-setting-label">Select specific page</span>
-                    </div>
-                    <span className="ios-setting-sublabel">Filter extraction to a single page from multi-page PDFs</span>
-                  </div>
-                  {/* iOS Toggle Switch */}
-                  <label className="ios-switch">
-                    <input 
-                      type="checkbox" 
-                      checked={extractSinglePage} 
-                      onChange={(e) => setExtractSinglePage(e.target.checked)} 
-                    />
-                    <span className="ios-switch-slider"></span>
-                  </label>
-                </div>
-
-                {/* Page Selector (Shown when toggle is ON) */}
-                {extractSinglePage && (
-                  <div className="ios-page-selector-row">
-                    <div className="ios-page-selector-label">
-                      <Layers size={14} />
-                      <span>Choose Page to Extract</span>
-                    </div>
-                    <div className="ios-page-pills">
-                      {Array.from({ length: Math.min(totalPages, 12) }, (_, i) => i + 1).map((pNum) => (
-                        <button
-                          key={pNum}
-                          type="button"
-                          className={`ios-page-pill ${selectedPage === pNum ? "active" : ""}`}
-                          onClick={() => setSelectedPage(pNum)}
-                        >
-                          Page {pNum}
-                        </button>
-                      ))}
-                      {totalPages > 12 && (
-                        <div className="ios-custom-page-input-wrap">
-                          <span>Page:</span>
-                          <input 
-                            type="number" 
-                            min={1} 
-                            max={totalPages} 
-                            value={selectedPage} 
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              if (!isNaN(val) && val >= 1 && val <= totalPages) {
-                                setSelectedPage(val);
-                              }
-                            }}
-                            className="ios-page-number-input"
-                          />
+              {/* Configuration options - only shown once a PDF is selected */}
+              {modalPdfPath && (
+                <>
+                  {/* Target Email Container Width Selection (700px, 650px, 600px) */}
+                  <div className="ios-settings-card" style={{ animation: "fadeIn 0.2s ease-out" }}>
+                    <div className="ios-setting-row">
+                      <div className="ios-setting-info">
+                        <div className="ios-setting-title-row">
+                          <span className="ios-setting-label">Target Email Container Width</span>
                         </div>
-                      )}
+                        <span className="ios-setting-sublabel">Includes standard 20px padding ({selectedEmailWidth - 40}px content width)</span>
+                      </div>
+                      <div className="ios-width-pill-group">
+                        {[700, 650, 600].map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            className={`ios-width-pill ${selectedEmailWidth === w ? "active" : ""}`}
+                            onClick={() => setSelectedEmailWidth(w)}
+                          >
+                            <span className="pill-px-val">{w}px</span>
+                            {w === 700 && <span className="pill-rec-dot" title="Standard"></span>}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
+
+                  {/* Page Number Selection Section */}
+                  <div className="ios-settings-card" style={{ animation: "fadeIn 0.2s ease-out" }}>
+                    <div className="ios-setting-row">
+                      <div className="ios-setting-info">
+                        <div className="ios-setting-title-row">
+                          <span className="ios-setting-label">Select specific page</span>
+                        </div>
+                        <span className="ios-setting-sublabel">Filter extraction to a single page from multi-page PDFs</span>
+                      </div>
+                      {/* iOS Toggle Switch */}
+                      <label className="ios-switch">
+                        <input 
+                          type="checkbox" 
+                          checked={extractSinglePage} 
+                          onChange={(e) => setExtractSinglePage(e.target.checked)} 
+                        />
+                        <span className="ios-switch-slider"></span>
+                      </label>
+                    </div>
+
+                    {/* Page Selector (Shown when toggle is ON) */}
+                    {extractSinglePage && (
+                      <div className="ios-page-selector-row">
+                        <div className="ios-page-selector-label">
+                          <Layers size={14} />
+                          <span>Choose Page to Extract</span>
+                        </div>
+                        <div className="ios-page-pills">
+                          {Array.from({ length: Math.min(totalPages, 12) }, (_, i) => i + 1).map((pNum) => (
+                            <button
+                              key={pNum}
+                              type="button"
+                              className={`ios-page-pill ${selectedPage === pNum ? "active" : ""}`}
+                              onClick={() => setSelectedPage(pNum)}
+                            >
+                              Page {pNum}
+                            </button>
+                          ))}
+                          {totalPages > 12 && (
+                            <div className="ios-custom-page-input-wrap">
+                              <span>Page:</span>
+                              <input 
+                                type="number" 
+                                min={1} 
+                                max={totalPages} 
+                                value={selectedPage} 
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  if (!isNaN(val) && val >= 1 && val <= totalPages) {
+                                    setSelectedPage(val);
+                                  }
+                                }}
+                                className="ios-page-number-input"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Modal Footer Actions */}
@@ -650,6 +1152,14 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
           onConfirm={handleMarkingModalConfirm}
         />
       )}
+
+      {/* Default Browser Selection Modal for MJML Agent */}
+      <BrowserSelectModal
+        isOpen={showBrowserModal}
+        onClose={() => setShowBrowserModal(false)}
+        onSelectBrowser={handleSelectAgentBrowser}
+        currentBrowserPath={localStorage.getItem("nocodemail_agent_browser") || ""}
+      />
     </div>
   );
 };

@@ -90,6 +90,8 @@ const win32_base = struct {
     extern "kernel32" fn SetDllDirectoryW(lpPathName: [*:0]const u16) callconv(.winapi) c_int;
     extern "kernel32" fn MultiByteToWideChar(CodePage: u32, dwFlags: u32, lpMultiByteStr: [*]const u8, cbMultiByte: c_int, lpWideCharStr: ?[*]u16, cchWideChar: c_int) callconv(.winapi) c_int;
     extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn SetEnvironmentVariableW(lpName: [*:0]const u16, lpValue: ?[*:0]const u16) callconv(.winapi) c_int;
+    extern "kernel32" fn GetEnvironmentVariableW(lpName: [*:0]const u16, lpBuffer: ?[*]u16, nSize: u32) callconv(.winapi) u32;
 };
 
 const win32_shell = struct {
@@ -166,6 +168,7 @@ pub fn ensureEmbeddedDependencies() void {
 // Embedded UI Frontend Assets
 const EMBED_INDEX_HTML = @embedFile("embedded_ui/index.html");
 const EMBED_APP_JS = @embedFile("embedded_ui/assets/app.js");
+const EMBED_MJML_JS = @embedFile("embedded_ui/assets/mjml.js");
 const EMBED_INDEX_CSS = @embedFile("embedded_ui/assets/index.css");
 const EMBED_FAVICON = @embedFile("embedded_ui/favicon.svg");
 
@@ -206,6 +209,9 @@ fn handleConnection(sock: usize) void {
     if (std.mem.eql(u8, url_path, "/") or std.mem.eql(u8, url_path, "/index.html") or std.mem.eql(u8, url_path, "")) {
         content = EMBED_INDEX_HTML;
         content_type = "text/html; charset=utf-8";
+    } else if (std.mem.endsWith(u8, url_path, "mjml.js")) {
+        content = EMBED_MJML_JS;
+        content_type = "application/javascript; charset=utf-8";
     } else if (std.mem.endsWith(u8, url_path, "app.js") or std.mem.endsWith(u8, url_path, ".js")) {
         content = EMBED_APP_JS;
         content_type = "application/javascript; charset=utf-8";
@@ -816,6 +822,38 @@ pub const App = struct {
         }
     }
 
+    pub fn handleReadFile(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var path: []const u8 = "";
+        if (std.json.parseFromSlice([]struct { path: []const u8 }, alloc, req, .{})) |parsed_arr| {
+            if (parsed_arr.value.len > 0) path = parsed_arr.value[0].path;
+        } else |_| {
+            if (std.json.parseFromSlice(struct { path: []const u8 }, alloc, req, .{})) |parsed_obj| {
+                path = parsed_obj.value.path;
+            } else |_| {
+                self.w.respond(seq, .err, "{\"error\":\"Invalid arguments\"}") catch {};
+                return;
+            }
+        }
+
+        if (path.len == 0) {
+            self.w.respond(seq, .err, "{\"error\":\"Empty path\"}") catch {};
+            return;
+        }
+
+        const path_z = alloc.dupeZ(u8, path) catch return;
+        const content = readFileAlloc(alloc, path_z) orelse {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"File not found\"}") catch {};
+            return;
+        };
+
+        const res_json = std.fmt.allocPrintSentinel(alloc, "{{\"success\":true,\"content\":{f}}}", .{std.json.fmt(content, .{})}, 0) catch return;
+        self.w.respond(seq, .ok, res_json) catch {};
+    }
+
     pub fn handleGetInstalledBrowsers(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
         _ = req;
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -1082,19 +1120,57 @@ pub fn main() !void {
         }
     }
 
+    // Configure persistent WebView2 profile folder in %LOCALAPPDATA%\NoCodeMail\wv2_profile for instant cached startups
+    var local_app_buf: [2048]u16 = undefined;
+    const name_local_app = std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA");
+    const val_len = win32_base.GetEnvironmentVariableW(name_local_app, &local_app_buf, local_app_buf.len);
+    if (val_len > 0 and val_len < 1900) {
+        const sub_path = std.unicode.utf8ToUtf16LeStringLiteral("\\NoCodeMail\\wv2_profile");
+        @memcpy(local_app_buf[val_len..val_len + sub_path.len], sub_path);
+        local_app_buf[val_len + sub_path.len] = 0;
+
+        const var_name = std.unicode.utf8ToUtf16LeStringLiteral("WEBVIEW2_USER_DATA_FOLDER");
+        _ = win32_base.SetEnvironmentVariableW(var_name, @ptrCast(&local_app_buf));
+    }
+
     // Start embedded high-speed WinSock server for self-contained UI serving
     const server_t = try std.Thread.spawn(.{}, serverThread, .{});
     server_t.detach();
 
-    // Give server 10ms to bind socket
-    Sleep(10);
+    // Give server 1ms to bind socket
+    Sleep(1);
 
-    // Create native WebView2 window with 1ms instant launch (debug = true enables right click inspection & DevTools)
+    // Create native WebView2 window with instant launch
     const w = try Webview.create(true, null);
     defer _ = w.destroy() catch {};
 
     try w.setTitle("NoCodeMail - Email Design Studio");
     try w.setSize(1440, 900, .none);
+
+    // Apply custom application icon on native Win32 window (titlebar & taskbar preview)
+    const win32_icon = struct {
+        extern "user32" fn LoadImageW(hInst: ?*anyopaque, name: usize, type_: u32, cx: c_int, cy: c_int, fuLoad: u32) callconv(.winapi) ?*anyopaque;
+        extern "user32" fn SendMessageW(hWnd: *anyopaque, Msg: u32, wParam: usize, lParam: isize) callconv(.winapi) isize;
+        extern "user32" fn GetSystemMetrics(nIndex: c_int) callconv(.winapi) c_int;
+        extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+    };
+    const hwnd_ptr = w.getWindow();
+    if (hwnd_ptr) |h| {
+        const h_inst = win32_icon.GetModuleHandleW(null);
+        const sm_cx_icon = win32_icon.GetSystemMetrics(11); // SM_CXICON (DPI-scaled big icon)
+        const sm_cy_icon = win32_icon.GetSystemMetrics(12); // SM_CYICON
+        const sm_cx_smicon = win32_icon.GetSystemMetrics(49); // SM_CXSMICON (DPI-scaled small icon)
+        const sm_cy_smicon = win32_icon.GetSystemMetrics(50); // SM_CYSMICON
+
+        const h_icon_big = win32_icon.LoadImageW(h_inst, 1, 1, sm_cx_icon, sm_cy_icon, 0x0000);
+        const h_icon_small = win32_icon.LoadImageW(h_inst, 1, 1, sm_cx_smicon, sm_cy_smicon, 0x0000);
+        if (h_icon_big) |ico| {
+            _ = win32_icon.SendMessageW(h, 0x0080, 1, @intCast(@intFromPtr(ico))); // WM_SETICON, ICON_BIG
+        }
+        if (h_icon_small) |ico| {
+            _ = win32_icon.SendMessageW(h, 0x0080, 0, @intCast(@intFromPtr(ico))); // WM_SETICON, ICON_SMALL
+        }
+    }
 
     var app = App{ .w = w };
 
@@ -1107,6 +1183,7 @@ pub fn main() !void {
     try w.bind(App, "chooseHtml", App.handleChooseHtml, &app);
     try w.bind(App, "extractPdf", App.handleExtractPdf, &app);
     try w.bind(App, "saveFile", App.handleSaveFile, &app);
+    try w.bind(App, "readFile", App.handleReadFile, &app);
     try w.bind(App, "getInstalledBrowsers", App.handleGetInstalledBrowsers, &app);
     try w.bind(App, "openInBrowser", App.handleOpenInBrowser, &app);
 

@@ -11,6 +11,11 @@ export default defineConfig({
       output: {
         entryFileNames: 'assets/app.js',
         chunkFileNames: 'assets/[name].js',
+        manualChunks(id) {
+          if (id.includes('mjml-browser')) {
+            return 'mjml';
+          }
+        },
         assetFileNames: 'assets/[name].[ext]'
       }
     }

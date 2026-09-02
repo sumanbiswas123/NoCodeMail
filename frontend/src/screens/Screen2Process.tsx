@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
-import mjml2html from "mjml-browser";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   ArrowLeft, 
+  ArrowRight,
   Check, 
   Copy, 
   FileText, 
@@ -10,12 +10,22 @@ import {
   Table, 
   Palette, 
   Eye, 
-  ExternalLink,
+  ExternalLink, 
   Sparkles,
   RotateCw,
   Crop
 } from "lucide-react";
 import { nativeIPC, PDFExtractionData, MarkedRegion, FooterPreset } from "../services/ipc";
+import { BrowserSelectModal } from "../components/BrowserSelectModal";
+
+// Lazy-loader for heavy 1.2MB MJML browser bundle (keeps initial boot under 60KB)
+let mjmlCompilerPromise: Promise<any> | null = null;
+const getMjmlCompiler = () => {
+  if (!mjmlCompilerPromise) {
+    mjmlCompilerPromise = import("mjml-browser").then((m) => m.default || m);
+  }
+  return mjmlCompilerPromise;
+};
 
 interface Screen2Props {
   pdfPath: string;
@@ -23,6 +33,10 @@ interface Screen2Props {
   emailWidth?: number;
   markedRegions?: MarkedRegion[];
   selectedFooter?: FooterPreset | null;
+  initialExtractData?: PDFExtractionData | null;
+  initialMjmlText?: string;
+  initialGeneratedHtml?: string;
+  onSaveProcessState?: (data: PDFExtractionData | null, mjml: string, html: string) => void;
   onBackToHome: () => void;
   onOpenEditor: (htmlContent: string, fileName: string) => void;
 }
@@ -33,38 +47,101 @@ export const Screen2Process: React.FC<Screen2Props> = ({
   emailWidth = 700, 
   markedRegions = [], 
   selectedFooter = null,
+  initialExtractData = null,
+  initialMjmlText = "",
+  initialGeneratedHtml = "",
+  onSaveProcessState,
   onBackToHome, 
   onOpenEditor 
 }) => {
-  const [extracting, setExtracting] = useState(true);
-  const [extractProgress, setExtractProgress] = useState(75);
-  const [extractData, setExtractData] = useState<PDFExtractionData | null>(null);
+  const [extracting, setExtracting] = useState(!initialExtractData);
+  const [extractProgress, setExtractProgress] = useState(initialExtractData ? 100 : 75);
+  const [extractData, setExtractData] = useState<PDFExtractionData | null>(initialExtractData || null);
 
-  // MJML state: Starts empty waiting for AI / user pasted MJML
-  const [mjmlText, setMjmlText] = useState("");
-  const [generatedHtml, setGeneratedHtml] = useState("");
-  const [charCount, setCharCount] = useState(0);
+  // MJML state: Preserves previous user / AI pasted MJML & compiled HTML
+  const [mjmlText, setMjmlText] = useState(initialMjmlText || "");
+  const [generatedHtml, setGeneratedHtml] = useState(initialGeneratedHtml || "");
+  const [charCount, setCharCount] = useState(initialGeneratedHtml ? initialGeneratedHtml.length : 0);
   // Modals state
   const [showJsonModal, setShowJsonModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showAssetsModal, setShowAssetsModal] = useState(false);
+  const [showBrowserModal, setShowBrowserModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const handleOpenMjmlAgent = () => {
+    const savedBrowser = localStorage.getItem("nocodemail_agent_browser");
+    if (!savedBrowser) {
+      setShowBrowserModal(true);
+    } else {
+      const url = import.meta.env.VITE_MJML_AGENT_URL || "";
+      if (url) {
+        nativeIPC.openInBrowser({ url, browser_path: savedBrowser });
+      }
+    }
+  };
+
+  const handleMjmlAgentContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setShowBrowserModal(true);
+  };
+
+  const handleSelectAgentBrowser = (browserPath: string) => {
+    localStorage.setItem("nocodemail_agent_browser", browserPath);
+    setShowBrowserModal(false);
+    const url = import.meta.env.VITE_MJML_AGENT_URL || "";
+    if (url) {
+      nativeIPC.openInBrowser({ url, browser_path: browserPath });
+    }
+  };
 
   const fileName = typeof pdfPath === "string" ? pdfPath.split(/[/\\]/).pop() || "email-design.pdf" : "email-design.pdf";
   const baseName = fileName.replace(/\.[^/.]+$/, "");
 
-  // Auto-run native extraction on mount
+  // Notify parent of state changes to keep cache warm
   useEffect(() => {
+    if (onSaveProcessState) {
+      onSaveProcessState(extractData, mjmlText, generatedHtml);
+    }
+  }, [extractData, mjmlText, generatedHtml, onSaveProcessState]);
+
+  // Auto-run native extraction on mount only if not already cached
+  useEffect(() => {
+    if (initialExtractData) {
+      setExtractData(initialExtractData);
+      setExtracting(false);
+      setExtractProgress(100);
+      return;
+    }
+
     const runExtraction = async () => {
       try {
         setExtractProgress(75);
+        setExtracting(true);
         const data = await nativeIPC.extractPdf(pdfPath, emailWidth, targetPage, markedRegions);
         setExtractData(data);
-        if (data?.package_dir && selectedFooter?.code) {
-          // Save standard footer preset code to package folder
-          const footerSavePath = `${data.package_dir}\\footer_preset.html`;
-          await nativeIPC.saveFile(footerSavePath, selectedFooter.code);
+        if (data?.package_dir) {
+          if (selectedFooter?.code) {
+            const footerSavePath = `${data.package_dir}\\footer_preset.html`;
+            await nativeIPC.saveFile(footerSavePath, selectedFooter.code);
+          }
+          try {
+            const raw = localStorage.getItem("nocodemail_recent_projects");
+            if (raw) {
+              const list = JSON.parse(raw);
+              if (Array.isArray(list)) {
+                for (const item of list) {
+                  if (item.path === pdfPath) {
+                    item.package_dir = data.package_dir;
+                    item.target_page = targetPage || 1;
+                    item.email_width = emailWidth;
+                  }
+                }
+                localStorage.setItem("nocodemail_recent_projects", JSON.stringify(list));
+              }
+            }
+          } catch {}
         }
         setExtractProgress(100);
         setExtracting(false);
@@ -74,7 +151,60 @@ export const Screen2Process: React.FC<Screen2Props> = ({
       }
     };
     runExtraction();
-  }, [pdfPath, targetPage, emailWidth, markedRegions, selectedFooter]);
+  }, [pdfPath, targetPage, emailWidth, markedRegions, selectedFooter, initialExtractData]);
+
+  // Dynamically resolve list of all extracted assets from design_json (supports marked regions asset_pX_mark_Y.png and standard assets)
+  const extractedAssetList = useMemo<{ name: string; fullPath: string; url: string }[]>(() => {
+    if (!extractData?.package_dir) return [];
+    const list: { name: string; fullPath: string; url: string }[] = [];
+    const seenNames = new Set<string>();
+
+    if (extractData.design_json) {
+      try {
+        const parsed = typeof extractData.design_json === "string" 
+          ? JSON.parse(extractData.design_json) 
+          : extractData.design_json;
+        if (parsed && Array.isArray(parsed.pages)) {
+          for (const page of parsed.pages) {
+            if (Array.isArray(page.elements)) {
+              for (const el of page.elements) {
+                if (el.type === "image" && el.asset_path) {
+                  const rawPath = String(el.asset_path);
+                  const cleanName = rawPath.replace(/^[\\/]?assets[\\/]/, "").split(/[/\\]/).pop() || rawPath;
+                  if (cleanName && !seenNames.has(cleanName)) {
+                    seenNames.add(cleanName);
+                    const fullPath = `${extractData.package_dir}\\assets\\${cleanName}`;
+                    list.push({
+                      name: cleanName,
+                      fullPath,
+                      url: `/pkg/${encodeURIComponent(fullPath)}`,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Could not parse design_json for asset list:", e);
+      }
+    }
+
+    // Fallback if no assets found from design_json but total_images > 0
+    if (list.length === 0 && extractData.total_images > 0) {
+      for (let i = 1; i <= extractData.total_images; i++) {
+        const name = `asset_p${targetPage || 1}_${i}.png`;
+        const fullPath = `${extractData.package_dir}\\assets\\${name}`;
+        list.push({
+          name,
+          fullPath,
+          url: `/pkg/${encodeURIComponent(fullPath)}`,
+        });
+      }
+    }
+
+    return list;
+  }, [extractData?.package_dir, extractData?.design_json, extractData?.total_images, targetPage]);
 
 
   const handleConvertMjml = async (codeToCompile?: string) => {
@@ -85,7 +215,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
       return;
     }
     try {
-      // 1. Compile using official MJML engine
+      // 1. Compile using dynamically imported official MJML engine
+      const mjml2html = await getMjmlCompiler();
       const result = await mjml2html(text, {
         keepComments: false,
         minify: false,
@@ -97,10 +228,12 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         setGeneratedHtml(compiledHtml);
         setCharCount(compiledHtml.length);
 
-        // 2. Save production HTML to disk in the AI package folder
+        // 2. Save production HTML and MJML source to disk in the AI package folder
         if (extractData?.package_dir) {
-          const savePath = `${extractData.package_dir}\\${baseName}.html`;
-          await nativeIPC.saveFile(savePath, compiledHtml);
+          const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
+          const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+          await nativeIPC.saveFile(savePathHtml, compiledHtml);
+          await nativeIPC.saveFile(savePathMjml, text);
         }
       }
     } catch (e) {
@@ -331,23 +464,23 @@ export const Screen2Process: React.FC<Screen2Props> = ({
           {/* 3. Assets Grid */}
           <div className="dash-card">
             <div className="dash-card-header">
-              <h3>Assets ({extractData?.total_images !== undefined ? extractData.total_images : (extracting ? "..." : 0)})</h3>
+              <h3>Assets ({extractedAssetList.length || (extractData?.total_images !== undefined ? extractData.total_images : (extracting ? "..." : 0))})</h3>
               <button className="view-all-link" onClick={() => setShowAssetsModal(true)}>View all</button>
             </div>
             <div className="dash-card-body assets-body">
               <div className="assets-grid-thumb">
-                {extractData?.package_dir && extractData.total_images > 0 ? (
-                  Array.from({ length: Math.min(extractData.total_images, 5) }).map((_, i) => (
+                {extractData?.package_dir && extractedAssetList.length > 0 ? (
+                  extractedAssetList.slice(0, 5).map((asset, i) => (
                     <div 
-                      key={i} 
+                      key={asset.name || i} 
                       className="asset-photo-box" 
                       style={{ overflow: "hidden", background: "#f8fafc", border: "1px solid #e2e8f0", cursor: "pointer", padding: "2px" }}
                       onClick={() => setShowAssetsModal(true)}
-                      title={`View Asset ${i + 1}`}
+                      title={`View ${asset.name}`}
                     >
                       <img 
-                        src={`/pkg/${encodeURIComponent(`${extractData.package_dir}\\assets\\asset_p${targetPage || 1}_${i + 1}.png`)}`} 
-                        alt={`Asset ${i + 1}`}
+                        src={asset.url} 
+                        alt={asset.name}
                         style={{ width: "100%", height: "100%", objectFit: "contain" }}
                         onError={(e) => {
                           (e.target as HTMLElement).style.display = "none";
@@ -365,7 +498,7 @@ export const Screen2Process: React.FC<Screen2Props> = ({
                   </>
                 )}
                 <div className="asset-photo-box more-badge-box" onClick={() => setShowAssetsModal(true)} style={{ cursor: "pointer" }}>
-                  <span>+{Math.max(0, (extractData?.total_images || 0) - 5)}</span>
+                  <span>+{Math.max(0, (extractedAssetList.length || extractData?.total_images || 0) - 5)}</span>
                 </div>
               </div>
             </div>
@@ -426,9 +559,41 @@ export const Screen2Process: React.FC<Screen2Props> = ({
           </div>
         </section>
 
-        {/* Central Down Arrow Circle */}
-        <div className="section-down-arrow-container">
-          <div className="purple-down-circle">↓</div>
+        {/* Central MJML Agent Launcher */}
+        <div className="section-down-arrow-container" style={{ display: "flex", justifyContent: "center", alignItems: "center", margin: "16px 0", gap: "10px" }}>
+          <button
+            type="button"
+            onClick={handleOpenMjmlAgent}
+            onContextMenu={handleMjmlAgentContextMenu}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "24px",
+              padding: "10px 24px",
+              fontSize: "13.5px",
+              fontWeight: "700",
+              cursor: "pointer",
+              boxShadow: "0 4px 16px rgba(79, 70, 229, 0.35)",
+              transition: "all 0.18s cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateY(-2px) scale(1.03)";
+              e.currentTarget.style.boxShadow = "0 6px 22px rgba(79, 70, 229, 0.45)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "none";
+              e.currentTarget.style.boxShadow = "0 4px 16px rgba(79, 70, 229, 0.35)";
+            }}
+            title="Left-click: Open MJML AI Agent | Right-click: Change Default Browser"
+          >
+            <Sparkles size={16} />
+            <span>MJML Agent</span>
+            <ArrowRight size={16} />
+          </button>
         </div>
 
         {/* Bottom MJML -> HTML Section (1:1 with Screen2.png) */}
@@ -536,17 +701,16 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         <div className="modal-backdrop" onClick={() => setShowAssetsModal(false)}>
           <div className="modal-window" style={{ width: "860px", maxWidth: "92vw", maxHeight: "88vh" }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Extracted Visual Assets ({extractData?.total_images || 0}) — {fileName}</h3>
+              <h3>Extracted Visual Assets ({extractedAssetList.length || extractData?.total_images || 0}) — {fileName}</h3>
               <button className="close-btn" onClick={() => setShowAssetsModal(false)}>✕</button>
             </div>
             <div className="modal-body" style={{ padding: "24px", background: "#f8fafc", overflowY: "auto", maxHeight: "calc(88vh - 70px)" }}>
-              {extractData?.package_dir && extractData.total_images > 0 ? (
+              {extractData?.package_dir && extractedAssetList.length > 0 ? (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "16px" }}>
-                  {Array.from({ length: extractData.total_images }).map((_, i) => {
-                    const imgUrl = `/pkg/${encodeURIComponent(`${extractData.package_dir}\\assets\\asset_p${targetPage || 1}_${i + 1}.png`)}`;
+                  {extractedAssetList.map((asset, i) => {
                     return (
                       <div 
-                        key={i} 
+                        key={asset.name || i} 
                         style={{ 
                           background: "#ffffff", 
                           border: "1px solid #e2e8f0", 
@@ -561,8 +725,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
                       >
                         <div style={{ width: "100%", height: "120px", display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9", borderRadius: "8px", overflow: "hidden" }}>
                           <img 
-                            src={imgUrl} 
-                            alt={`Asset ${i + 1}`} 
+                            src={asset.url} 
+                            alt={asset.name} 
                             style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
                             onError={(e) => {
                               (e.target as HTMLElement).style.opacity = "0.3";
@@ -570,9 +734,11 @@ export const Screen2Process: React.FC<Screen2Props> = ({
                           />
                         </div>
                         <div style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", color: "#64748b" }}>
-                          <span style={{ fontWeight: "700", color: "#0f172a" }}>asset_p{targetPage || 1}_{i + 1}.png</span>
+                          <span style={{ fontWeight: "700", color: "#0f172a", maxWidth: "105px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={asset.name}>
+                            {asset.name}
+                          </span>
                           <a 
-                            href={imgUrl} 
+                            href={asset.url} 
                             target="_blank" 
                             rel="noreferrer" 
                             style={{ color: "#4f46e5", fontWeight: "600", textDecoration: "none", display: "flex", alignItems: "center", gap: "2px" }}
@@ -728,6 +894,14 @@ export const Screen2Process: React.FC<Screen2Props> = ({
           </div>
         </div>
       )}
+
+      {/* Default Browser Selection Modal for MJML Agent */}
+      <BrowserSelectModal
+        isOpen={showBrowserModal}
+        onClose={() => setShowBrowserModal(false)}
+        onSelectBrowser={handleSelectAgentBrowser}
+        currentBrowserPath={localStorage.getItem("nocodemail_agent_browser") || ""}
+      />
     </div>
   );
 };

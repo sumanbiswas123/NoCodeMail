@@ -12,7 +12,8 @@ import {
   Copy,
   X,
   ExternalLink,
-  Globe
+  Globe,
+  ArrowLeft
 } from "lucide-react";
 import { StyleInspector } from "../components/StyleInspector";
 import { nativeIPC, BrowserInfo } from "../services/ipc";
@@ -23,6 +24,7 @@ interface Screen3Props {
   initialFileName: string;
   initialFilePath?: string;
   onBackToHome: () => void;
+  onBackToProcess?: () => void;
 }
 
 const DEFAULT_FALLBACK_HTML = `<!DOCTYPE html>
@@ -45,6 +47,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   initialFileName,
   initialFilePath,
   onBackToHome,
+  onBackToProcess,
 }) => {
   const [fileName, setFileName] = useState(initialFileName || "campaign_v2.html");
   const [isEditingName, setIsEditingName] = useState(false);
@@ -621,11 +624,49 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           zIndex: 100,
         }}
       >
-        {/* Left Section: Brand Logo & File Name */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+        {/* Left Section: Back Button + Brand Logo & File Name */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+          {/* Back Navigation Button */}
+          <button
+            type="button"
+            onClick={onBackToProcess || onBackToHome}
+            title={onBackToProcess ? "Back to Extraction Process (Screen 2)" : "Back to Home"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              padding: "5px 10px",
+              borderRadius: "7px",
+              background: "#ffffff",
+              border: "1px solid #cbd5e1",
+              color: "#334155",
+              fontSize: "11.5px",
+              fontWeight: "600",
+              cursor: "pointer",
+              height: "31px",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+              transition: "all 0.12s ease",
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#f8fafc";
+              e.currentTarget.style.borderColor = "#94a3b8";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "#ffffff";
+              e.currentTarget.style.borderColor = "#cbd5e1";
+            }}
+          >
+            <ArrowLeft size={13} color="#475569" />
+            <span>{onBackToProcess ? "Back" : "Home"}</span>
+          </button>
+
+          <div style={{ width: "1px", height: "18px", background: "#e2e8f0", flexShrink: 0 }}></div>
+
           <div
             className="brand-logo small"
             onClick={onBackToHome}
+            title="Go to Welcome Screen"
             style={{
               cursor: "pointer",
               display: "flex",
