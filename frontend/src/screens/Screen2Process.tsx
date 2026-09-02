@@ -15,13 +15,14 @@ import {
   RotateCw,
   Crop
 } from "lucide-react";
-import { nativeIPC, PDFExtractionData, MarkedRegion } from "../services/ipc";
+import { nativeIPC, PDFExtractionData, MarkedRegion, FooterPreset } from "../services/ipc";
 
 interface Screen2Props {
   pdfPath: string;
   targetPage?: number;
   emailWidth?: number;
   markedRegions?: MarkedRegion[];
+  selectedFooter?: FooterPreset | null;
   onBackToHome: () => void;
   onOpenEditor: (htmlContent: string, fileName: string) => void;
 }
@@ -31,6 +32,7 @@ export const Screen2Process: React.FC<Screen2Props> = ({
   targetPage, 
   emailWidth = 700, 
   markedRegions = [], 
+  selectedFooter = null,
   onBackToHome, 
   onOpenEditor 
 }) => {
@@ -59,6 +61,11 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         setExtractProgress(75);
         const data = await nativeIPC.extractPdf(pdfPath, emailWidth, targetPage, markedRegions);
         setExtractData(data);
+        if (data?.package_dir && selectedFooter?.code) {
+          // Save standard footer preset code to package folder
+          const footerSavePath = `${data.package_dir}\\footer_preset.html`;
+          await nativeIPC.saveFile(footerSavePath, selectedFooter.code);
+        }
         setExtractProgress(100);
         setExtracting(false);
       } catch (e) {
@@ -67,7 +74,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
       }
     };
     runExtraction();
-  }, [pdfPath, targetPage, emailWidth, markedRegions]);
+  }, [pdfPath, targetPage, emailWidth, markedRegions, selectedFooter]);
+
 
   const handleConvertMjml = async (codeToCompile?: string) => {
     const text = codeToCompile !== undefined ? codeToCompile : mjmlText;

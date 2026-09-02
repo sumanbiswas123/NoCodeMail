@@ -10,10 +10,13 @@ import {
   FileDown,
   Check,
   Copy,
-  X
+  X,
+  ExternalLink,
+  Globe
 } from "lucide-react";
 import { StyleInspector } from "../components/StyleInspector";
-import { nativeIPC } from "../services/ipc";
+import { nativeIPC, BrowserInfo } from "../services/ipc";
+
 
 interface Screen3Props {
   initialHtml: string;
@@ -46,11 +49,63 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const [fileName, setFileName] = useState(initialFileName || "campaign_v2.html");
   const [isEditingName, setIsEditingName] = useState(false);
   const [viewMode, setViewMode] = useState<"desktop" | "mobile">("desktop");
-  const [canvasWidth, setCanvasWidth] = useState("700px");
+  const [mobileWidth, setMobileWidth] = useState<number>(375);
+  const [isResizingMobile, setIsResizingMobile] = useState<boolean>(false);
+  const resizeStartXRef = useRef<number>(0);
+  const resizeStartWidthRef = useRef<number>(375);
+
+  const canvasWidth = viewMode === "mobile" ? `${mobileWidth}px` : "700px";
+
+  const handleResizePointerDown = (e: React.PointerEvent, direction: "right" | "left") => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizingMobile(true);
+    resizeStartXRef.current = e.clientX;
+    resizeStartWidthRef.current = mobileWidth;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const deltaX = moveEvent.clientX - resizeStartXRef.current;
+      const widthChange = direction === "right" ? deltaX * 2 : -deltaX * 2;
+      const newWidth = Math.min(490, Math.max(320, Math.round(resizeStartWidthRef.current + widthChange)));
+      setMobileWidth(newWidth);
+    };
+
+    const handlePointerUp = () => {
+      setIsResizingMobile(false);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
   const [isSaved, setIsSaved] = useState(true);
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [rawCodeText, setRawCodeText] = useState("");
   const [codeCopied, setCodeCopied] = useState(false);
+
+  // Multi-browser menu state
+  const [showBrowserMenu, setShowBrowserMenu] = useState(false);
+  const [detectedBrowsers, setDetectedBrowsers] = useState<BrowserInfo[]>([]);
+  const [loadingBrowsers, setLoadingBrowsers] = useState(false);
+  const browserMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close browser menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (browserMenuRef.current && !browserMenuRef.current.contains(e.target as Node)) {
+        setShowBrowserMenu(false);
+      }
+    };
+    if (showBrowserMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showBrowserMenu]);
+
 
   // Folder path of the file on disk
   const rawFolder = initialFilePath && (initialFilePath.includes("/") || initialFilePath.includes("\\"))
@@ -481,6 +536,43 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
   };
 
+  const handleToggleBrowserMenu = async () => {
+    if (!showBrowserMenu) {
+      setLoadingBrowsers(true);
+      setShowBrowserMenu(true);
+      try {
+        const browsers = await nativeIPC.getInstalledBrowsers();
+        setDetectedBrowsers(browsers);
+      } catch (err) {
+        console.error("Failed to detect browsers:", err);
+      } finally {
+        setLoadingBrowsers(false);
+      }
+    } else {
+      setShowBrowserMenu(false);
+    }
+  };
+
+  const handleLaunchBrowser = async (browser: BrowserInfo | null) => {
+    setShowBrowserMenu(false);
+    const pristine = exportPristineHtml();
+
+    let saveTarget = initialFilePath;
+    if (!saveTarget) {
+      const pkgDir = localStorage.getItem("nocodemail_last_pkg_dir");
+      saveTarget = pkgDir ? `${pkgDir}\\preview_browser.html` : "preview_browser.html";
+    }
+    try {
+      await nativeIPC.saveFile(saveTarget, pristine);
+      await nativeIPC.openInBrowser({
+        path: saveTarget,
+        browser_path: browser ? browser.path : undefined,
+      });
+    } catch (err) {
+      console.error("Failed to open browser:", err);
+    }
+  };
+
   // Keyboard shortcut listeners (Ctrl+S, Ctrl+Z, Ctrl+Y) on both main window & iframe
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -512,102 +604,499 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   return (
     <div className="screen3-container">
       {/* Top Navbar */}
-      <header className="editor-top-nav">
-        <div className="nav-left">
-          <div className="brand-logo small" onClick={onBackToHome} style={{ cursor: "pointer" }}>
-            <div className="logo-badge">N</div>
-            <span className="logo-text">NoCodeMail</span>
+      <header
+        className="editor-top-nav"
+        style={{
+          height: "52px",
+          minHeight: "52px",
+          padding: "0 18px",
+          background: "#ffffff",
+          borderBottom: "1px solid #e2e8f0",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "16px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
+          position: "relative",
+          zIndex: 100,
+        }}
+      >
+        {/* Left Section: Brand Logo & File Name */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+          <div
+            className="brand-logo small"
+            onClick={onBackToHome}
+            style={{
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              flexShrink: 0,
+            }}
+          >
+            <div
+              className="logo-badge"
+              style={{
+                width: "28px",
+                height: "28px",
+                borderRadius: "7px",
+                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                color: "#ffffff",
+                fontWeight: "800",
+                fontSize: "14px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              N
+            </div>
+            <span style={{ fontSize: "15px", fontWeight: "700", color: "#0f172a", letterSpacing: "-0.01em" }}>
+              NoCodeMail
+            </span>
           </div>
 
-          <div className="filename-editor-wrapper">
+          <div style={{ width: "1px", height: "18px", background: "#e2e8f0", flexShrink: 0 }}></div>
+
+          <div style={{ minWidth: 0 }}>
             {isEditingName ? (
               <input
                 type="text"
-                className="filename-input"
                 value={fileName}
                 onChange={(e) => setFileName(e.target.value)}
                 onBlur={() => setIsEditingName(false)}
                 onKeyDown={(e) => e.key === "Enter" && setIsEditingName(false)}
                 autoFocus
+                style={{
+                  padding: "4px 8px",
+                  borderRadius: "6px",
+                  border: "1.5px solid #4f46e5",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  color: "#0f172a",
+                  outline: "none",
+                  background: "#ffffff",
+                  width: "180px",
+                }}
               />
             ) : (
-              <div className="filename-display" onClick={() => setIsEditingName(true)}>
-                <span>{fileName}</span>
-                <Pencil size={13} className="pencil-icon" />
+              <div
+                onClick={() => setIsEditingName(true)}
+                title={`Click to rename: ${fileName}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "4px 8px",
+                  borderRadius: "6px",
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  cursor: "pointer",
+                  maxWidth: "200px",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "#f8fafc")}
+              >
+                <span style={{ fontSize: "12px", fontWeight: "600", color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {fileName}
+                </span>
+                <Pencil size={11} color="#94a3b8" style={{ flexShrink: 0 }} />
               </div>
             )}
           </div>
         </div>
 
-        {/* Center Controls: Viewport, Width, Undo/Redo */}
-        <div className="nav-center">
-          <div className="viewport-toggle-group">
+        {/* Center Controls: Viewport Mode, Width, Undo/Redo */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+          {/* Segmented Viewport Switcher */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              background: "#f1f5f9",
+              padding: "2px",
+              borderRadius: "7px",
+              border: "1px solid #e2e8f0",
+              gap: "2px",
+            }}
+          >
             <button
-              className={`vp-btn ${viewMode === "desktop" ? "active" : ""}`}
-              onClick={() => {
-                setViewMode("desktop");
-                setCanvasWidth("700px");
+              type="button"
+              onClick={() => setViewMode("desktop")}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "4px 9px",
+                borderRadius: "5px",
+                fontSize: "11.5px",
+                fontWeight: viewMode === "desktop" ? "700" : "600",
+                background: viewMode === "desktop" ? "#ffffff" : "transparent",
+                color: viewMode === "desktop" ? "#4f46e5" : "#64748b",
+                border: "none",
+                cursor: "pointer",
+                boxShadow: viewMode === "desktop" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                transition: "all 0.12s ease",
               }}
             >
-              <Monitor size={14} />
+              <Monitor size={13} />
               <span>Desktop</span>
             </button>
             <button
-              className={`vp-btn ${viewMode === "mobile" ? "active" : ""}`}
-              onClick={() => {
-                setViewMode("mobile");
-                setCanvasWidth("375px");
+              type="button"
+              onClick={() => setViewMode("mobile")}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "4px 9px",
+                borderRadius: "5px",
+                fontSize: "11.5px",
+                fontWeight: viewMode === "mobile" ? "700" : "600",
+                background: viewMode === "mobile" ? "#ffffff" : "transparent",
+                color: viewMode === "mobile" ? "#4f46e5" : "#64748b",
+                border: "none",
+                cursor: "pointer",
+                boxShadow: viewMode === "mobile" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                transition: "all 0.12s ease",
               }}
             >
-              <Smartphone size={14} />
+              <Smartphone size={13} />
               <span>Mobile</span>
             </button>
           </div>
 
-          <div className="width-dropdown">
-            <span>{canvasWidth}</span>
-            <ChevronDown size={13} />
-          </div>
+          {/* Width Control: Range Slider for Mobile (320px - 490px) or Static Pill for Desktop */}
+          {viewMode === "mobile" ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "3px 8px",
+                borderRadius: "6px",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+              }}
+            >
+              <span style={{ fontSize: "11px", fontWeight: "700", color: "#4f46e5", minWidth: "40px", textAlign: "center" }}>
+                {mobileWidth}px
+              </span>
+              <input
+                type="range"
+                min="320"
+                max="490"
+                step="1"
+                value={mobileWidth}
+                onChange={(e) => setMobileWidth(Number(e.target.value))}
+                style={{
+                  width: "80px",
+                  accentColor: "#4f46e5",
+                  cursor: "pointer",
+                  height: "4px",
+                }}
+                title="Slide to resize mobile view (320px - 490px)"
+              />
+              <button
+                type="button"
+                onClick={() => setMobileWidth(375)}
+                title="Reset to 375px default (iPhone/Mobile)"
+                style={{
+                  fontSize: "10px",
+                  fontWeight: "700",
+                  padding: "1px 5px",
+                  borderRadius: "3px",
+                  border: "1px solid #cbd5e1",
+                  background: mobileWidth === 375 ? "#4f46e5" : "#ffffff",
+                  color: mobileWidth === 375 ? "#ffffff" : "#64748b",
+                  cursor: "pointer",
+                }}
+              >
+                375
+              </button>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "4px 8px",
+                borderRadius: "6px",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                fontSize: "11.5px",
+                fontWeight: "600",
+                color: "#475569",
+              }}
+            >
+              <span>700px</span>
+            </div>
+          )}
 
-          <div className="undo-redo-group">
+          {/* Undo / Redo */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              background: "#f1f5f9",
+              padding: "2px",
+              borderRadius: "6px",
+              border: "1px solid #e2e8f0",
+              gap: "1px",
+            }}
+          >
             <button
-              className="icon-btn"
+              type="button"
               onClick={handleUndo}
               disabled={historyIndex === 0}
               title="Undo (Ctrl+Z)"
+              style={{
+                padding: "3px 6px",
+                borderRadius: "4px",
+                border: "none",
+                background: "transparent",
+                color: historyIndex === 0 ? "#cbd5e1" : "#475569",
+                cursor: historyIndex === 0 ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+              }}
             >
-              <Undo2 size={16} />
+              <Undo2 size={13} />
             </button>
             <button
-              className="icon-btn"
+              type="button"
               onClick={handleRedo}
               disabled={historyIndex === history.length - 1}
               title="Redo (Ctrl+Y)"
+              style={{
+                padding: "3px 6px",
+                borderRadius: "4px",
+                border: "none",
+                background: "transparent",
+                color: historyIndex === history.length - 1 ? "#cbd5e1" : "#475569",
+                cursor: historyIndex === history.length - 1 ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+              }}
             >
-              <Redo2 size={16} />
-            </button>
-          </div>
-
-          <div className="save-status-indicator">
-            <button className="save-btn" onClick={handleSave}>
-              <span className={`status-dot ${isSaved ? "saved" : "unsaved"}`}></span>
-              <span>{isSaved ? "Saved" : "Save"}</span>
+              <Redo2 size={13} />
             </button>
           </div>
         </div>
 
-        {/* Right Controls: Code & Export buttons */}
-        <div className="nav-right">
-          <button className="btn btn-secondary nav-action-btn" onClick={handleOpenCodeView} title="Code View">
-            <Code2 size={16} />
+        {/* Right Controls: Save Status, Browser Dropdown, Code View & Export */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+          {/* Save Status Indicator */}
+          <button
+            type="button"
+            onClick={handleSave}
+            title={isSaved ? "All changes saved" : "Click to save changes"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              padding: "4px 8px",
+              borderRadius: "6px",
+              background: isSaved ? "#f0fdf4" : "#fffbeb",
+              border: isSaved ? "1px solid #bbf7d0" : "1px solid #fde68a",
+              color: isSaved ? "#15803d" : "#b45309",
+              fontSize: "11px",
+              fontWeight: "700",
+              cursor: "pointer",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                borderRadius: "50%",
+                background: isSaved ? "#22c55e" : "#f59e0b",
+              }}
+            ></span>
+            <span>{isSaved ? "Saved" : "Save*"}</span>
+          </button>
+
+          <div style={{ width: "1px", height: "18px", background: "#e2e8f0" }}></div>
+
+          {/* Open in Browser Multi-Browser Dropdown */}
+          <div ref={browserMenuRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={handleToggleBrowserMenu}
+              title="Open in Installed Browser"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "5px 10px",
+                borderRadius: "7px",
+                background: "#ffffff",
+                border: "1px solid #cbd5e1",
+                cursor: "pointer",
+                fontWeight: "600",
+                fontSize: "11.5px",
+                color: "#334155",
+                whiteSpace: "nowrap",
+                height: "31px",
+                transition: "all 0.12s ease",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#ffffff")}
+            >
+              <ExternalLink size={13} color="#4f46e5" />
+              <span>Browser</span>
+              <ChevronDown size={11} color="#64748b" />
+            </button>
+
+            {showBrowserMenu && (
+              <div 
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  marginTop: "6px",
+                  width: "230px",
+                  background: "#ffffff",
+                  borderRadius: "9px",
+                  border: "1px solid #e2e8f0",
+                  boxShadow: "0 10px 25px -5px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05)",
+                  padding: "5px",
+                  zIndex: 9999,
+                  animation: "fadeIn 0.12s ease-out",
+                }}
+              >
+                <div style={{
+                  padding: "5px 8px",
+                  fontSize: "10px",
+                  fontWeight: "700",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: "#94a3b8",
+                  borderBottom: "1px solid #f1f5f9",
+                  marginBottom: "3px",
+                }}>
+                  {loadingBrowsers ? "Detecting Browsers..." : `Installed Browsers (${detectedBrowsers.length})`}
+                </div>
+
+                {detectedBrowsers.map((b) => (
+                  <button
+                    key={b.id || b.name}
+                    type="button"
+                    onClick={() => handleLaunchBrowser(b)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "7px",
+                      padding: "7px 9px",
+                      borderRadius: "5px",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "11.5px",
+                      fontWeight: "600",
+                      color: "#1e293b",
+                      textAlign: "left",
+                      transition: "background 0.1s ease",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Globe size={13} color="#4f46e5" />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.name}
+                    </span>
+                  </button>
+                ))}
+
+                <div style={{ height: "1px", background: "#f1f5f9", margin: "3px 0" }}></div>
+
+                <button
+                  type="button"
+                  onClick={() => handleLaunchBrowser(null)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    padding: "7px 9px",
+                    borderRadius: "5px",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    fontSize: "11.5px",
+                    fontWeight: "600",
+                    color: "#64748b",
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#f1f5f9")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <ExternalLink size={12} color="#64748b" />
+                  <span>Default Browser</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* View Code Button */}
+          <button
+            type="button"
+            onClick={handleOpenCodeView}
+            title="View Raw HTML Code"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              padding: "5px 10px",
+              borderRadius: "7px",
+              background: "#ffffff",
+              border: "1px solid #cbd5e1",
+              cursor: "pointer",
+              fontWeight: "600",
+              fontSize: "11.5px",
+              color: "#334155",
+              height: "31px",
+              transition: "all 0.12s ease",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#f8fafc")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "#ffffff")}
+          >
+            <Code2 size={13} color="#475569" />
             <span>Code</span>
           </button>
-          <button className="btn btn-secondary nav-action-btn" onClick={handleSave} title="Export / Save HTML">
-            <FileDown size={16} />
+
+          {/* Export HTML Primary Button */}
+          <button
+            type="button"
+            onClick={handleSave}
+            title="Export Clean HTML"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              padding: "5px 12px",
+              borderRadius: "7px",
+              background: "linear-gradient(135deg, #4f46e5, #6366f1)",
+              border: "none",
+              color: "#ffffff",
+              cursor: "pointer",
+              fontWeight: "700",
+              fontSize: "11.5px",
+              height: "31px",
+              boxShadow: "0 2px 6px rgba(79, 70, 229, 0.25)",
+              transition: "all 0.12s ease",
+            }}
+          >
+            <FileDown size={13} color="#ffffff" />
             <span>Export HTML</span>
           </button>
         </div>
       </header>
+
 
       {/* Main Workspace: Split Canvas & Inspector */}
       <div className="editor-workspace">
@@ -631,9 +1120,70 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
               boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08)",
               background: "#ffffff",
               marginBottom: "60px",
-              transition: "width 0.2s ease",
+              transition: isResizingMobile ? "none" : "width 0.15s ease",
             }}
           >
+            {/* Mobile Viewport Left & Right Interactive Drag Handles */}
+            {viewMode === "mobile" && (
+              <>
+                <div
+                  onPointerDown={(e) => handleResizePointerDown(e, "left")}
+                  title={`Drag to resize width (${mobileWidth}px)`}
+                  style={{
+                    position: "absolute",
+                    left: "-9px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    width: "16px",
+                    height: "52px",
+                    borderRadius: "8px",
+                    background: "#ffffff",
+                    border: "1.5px solid #cbd5e1",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                    cursor: "ew-resize",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 20,
+                    userSelect: "none",
+                    touchAction: "none",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4f46e5")}
+                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#cbd5e1")}
+                >
+                  <div style={{ width: "2px", height: "18px", background: "#94a3b8", borderRadius: "1px" }} />
+                </div>
+
+                <div
+                  onPointerDown={(e) => handleResizePointerDown(e, "right")}
+                  title={`Drag to resize width (${mobileWidth}px)`}
+                  style={{
+                    position: "absolute",
+                    right: "-9px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    width: "16px",
+                    height: "52px",
+                    borderRadius: "8px",
+                    background: "#ffffff",
+                    border: "1.5px solid #cbd5e1",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                    cursor: "ew-resize",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 20,
+                    userSelect: "none",
+                    touchAction: "none",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4f46e5")}
+                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#cbd5e1")}
+                >
+                  <div style={{ width: "2px", height: "18px", background: "#94a3b8", borderRadius: "1px" }} />
+                </div>
+              </>
+            )}
+
             <div
               ref={emailContainerRef}
               className="email-direct-dom-root"
@@ -655,6 +1205,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             onUpdateStyle={handleUpdateStyle}
             onRemoveStyle={handleRemoveStyle}
             onRenameStyle={handleRenameStyle}
+            onSelectElement={handleSelectElement}
+            domRoot={emailContainerRef.current}
           />
         </aside>
       </div>

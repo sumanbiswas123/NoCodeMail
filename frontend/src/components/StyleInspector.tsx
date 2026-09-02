@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Plus, SlidersHorizontal, HelpCircle } from "lucide-react";
+import { Plus, SlidersHorizontal, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
 import { BoxModel } from "./BoxModel";
 
 interface MatchedRule {
@@ -15,7 +15,182 @@ interface StyleInspectorProps {
   onUpdateStyle: (property: string, value: string) => void;
   onRemoveStyle: (property: string) => void;
   onRenameStyle?: (oldProperty: string, newProperty: string, value: string) => void;
+  onSelectElement?: (el: HTMLElement) => void;
+  domRoot?: HTMLElement | null;
 }
+
+interface DomTreeNodeProps {
+  element: HTMLElement;
+  selectedElement: HTMLElement | null;
+  onSelectElement: (el: HTMLElement) => void;
+  depth?: number;
+}
+
+const DomTreeNode: React.FC<DomTreeNodeProps> = ({
+  element,
+  selectedElement,
+  onSelectElement,
+  depth = 0,
+}) => {
+  const isSelected = element === selectedElement;
+  const isParentOfSelected = useMemo(() => {
+    if (!selectedElement) return false;
+    return element.contains(selectedElement) && element !== selectedElement;
+  }, [element, selectedElement]);
+
+  const [expanded, setExpanded] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (isParentOfSelected) {
+      setExpanded(true);
+    }
+  }, [isParentOfSelected]);
+
+  const children = useMemo(() => {
+    return Array.from(element.children).filter(
+      (c) => c instanceof HTMLElement && !c.classList.contains("editor-selection-overlay")
+    ) as HTMLElement[];
+  }, [element]);
+
+  const hasChildren = children.length > 0;
+  const tag = element.tagName.toLowerCase();
+
+  const attrs = useMemo(() => {
+    const list: { name: string; value: string }[] = [];
+    if (element.className) {
+      const cls = Array.from(element.classList)
+        .filter((c) => !c.startsWith("editor-"))
+        .join(" ");
+      if (cls) list.push({ name: "class", value: cls });
+    }
+    if (element.getAttribute("style")) {
+      list.push({ name: "style", value: element.getAttribute("style")! });
+    }
+    if (element.getAttribute("width")) {
+      list.push({ name: "width", value: element.getAttribute("width")! });
+    }
+    if (element.getAttribute("align")) {
+      list.push({ name: "align", value: element.getAttribute("align")! });
+    }
+    if (element.getAttribute("src")) {
+      list.push({ name: "src", value: element.getAttribute("src")! });
+    }
+    if (element.getAttribute("href")) {
+      list.push({ name: "href", value: element.getAttribute("href")! });
+    }
+    return list;
+  }, [element, element.className]);
+
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isSelected && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isSelected]);
+
+  return (
+    <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "11px", lineHeight: "18px" }}>
+      <div
+        ref={rowRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectElement(element);
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "1px 4px 1px 0",
+          paddingLeft: `${depth * 10 + 4}px`,
+          background: isSelected ? "#e0e7ff" : "transparent",
+          color: isSelected ? "#312e81" : "#334155",
+          cursor: "pointer",
+          borderRadius: "3px",
+          whiteSpace: "nowrap",
+          userSelect: "none",
+        }}
+        onMouseEnter={(e) => {
+          if (!isSelected) e.currentTarget.style.background = "#f1f5f9";
+        }}
+        onMouseLeave={(e) => {
+          if (!isSelected) e.currentTarget.style.background = "transparent";
+        }}
+      >
+        {hasChildren ? (
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(!expanded);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "12px",
+              height: "12px",
+              marginRight: "2px",
+              cursor: "pointer",
+              color: "#64748b",
+            }}
+          >
+            {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </span>
+        ) : (
+          <span style={{ width: "12px", display: "inline-block", marginRight: "2px" }} />
+        )}
+
+        <span style={{ color: "#7c3aed", fontWeight: "700" }}>&lt;{tag}</span>
+
+        {attrs.map((attr, idx) => (
+          <span key={idx} style={{ marginLeft: "4px" }}>
+            <span style={{ color: "#2563eb" }}>{attr.name}</span>=
+            <span style={{ color: "#b45309" }}>"{attr.value.length > 25 ? attr.value.slice(0, 25) + "…" : attr.value}"</span>
+          </span>
+        ))}
+
+        <span style={{ color: "#7c3aed", fontWeight: "700" }}>&gt;</span>
+
+        {!expanded && hasChildren && (
+          <span style={{ color: "#94a3b8", marginLeft: "2px" }}>…&lt;/{tag}&gt;</span>
+        )}
+
+        {!hasChildren && element.innerText && (
+          <span style={{ color: "#64748b", marginLeft: "2px", maxWidth: "100px", overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" }}>
+            {element.innerText.slice(0, 16)}
+          </span>
+        )}
+
+        {!hasChildren && (
+          <span style={{ color: "#7c3aed", fontWeight: "700" }}>&lt;/{tag}&gt;</span>
+        )}
+      </div>
+
+      {hasChildren && expanded && (
+        <div>
+          {children.map((child, idx) => (
+            <DomTreeNode
+              key={idx}
+              element={child}
+              selectedElement={selectedElement}
+              onSelectElement={onSelectElement}
+              depth={depth + 1}
+            />
+          ))}
+          <div
+            style={{
+              paddingLeft: `${depth * 10 + 16}px`,
+              color: "#7c3aed",
+              fontWeight: "700",
+              lineHeight: "18px",
+            }}
+          >
+            &lt;/{tag}&gt;
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const CSS_PROPERTY_SUGGESTIONS = [
   "color", "background-color", "font-size", "font-weight", "font-family", 
@@ -54,7 +229,10 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   onUpdateStyle,
   onRemoveStyle,
   onRenameStyle,
+  onSelectElement,
+  domRoot,
 }) => {
+  const [showDomTree, setShowDomTree] = useState(false);
   const [filterText, setFilterText] = useState("");
   const [newProp, setNewProp] = useState("");
   const [newVal, setNewVal] = useState("");
@@ -124,7 +302,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     }
 
     return rules;
-  }, [selectedElement, inlineStyles]);
+  }, [selectedElement]);
 
   const getElementMetrics = () => {
     if (!selectedElement) {
@@ -184,19 +362,12 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     return "#0f172a";
   };
 
-  const filteredInlineProps = useMemo(() => {
-    return Object.entries(inlineStyles).filter(([prop, val]) => {
-      if (!filterText) return true;
-      return prop.toLowerCase().includes(filterText.toLowerCase()) || val.toLowerCase().includes(filterText.toLowerCase());
-    });
-  }, [inlineStyles, filterText]);
-
-  // Generate suggestions for active field with current value placed at top
   const activeSuggestions = useMemo(() => {
     if (!focusedField) return [];
     if (focusedField.type === "prop") {
-      const q = (focusedField.id === "new" ? newProp : "").toLowerCase();
-      return CSS_PROPERTY_SUGGESTIONS.filter((p) => !q || p.includes(q));
+      const q = (focusedField.id === "new" ? newProp : focusedField.id).toLowerCase().trim();
+      if (!q) return CSS_PROPERTY_SUGGESTIONS;
+      return CSS_PROPERTY_SUGGESTIONS.filter((p) => p.toLowerCase().includes(q));
     }
     if (focusedField.type === "val" && focusedField.propName) {
       const prop = focusedField.propName.toLowerCase();
@@ -249,8 +420,182 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     }
   };
 
+  const domHierarchy = useMemo(() => {
+    if (!selectedElement) return [];
+    const list: HTMLElement[] = [];
+    let curr: HTMLElement | null = selectedElement;
+    while (curr && curr.getAttribute && !curr.classList?.contains("email-direct-dom-root")) {
+      list.unshift(curr);
+      curr = curr.parentElement;
+      if (curr && (curr.tagName === "BODY" || curr.tagName === "HTML")) break;
+    }
+    return list;
+  }, [selectedElement]);
+
+  const filteredInlineProps = useMemo(() => {
+    const entries = Object.entries(inlineStyles);
+    if (!filterText.trim()) return entries;
+    const q = filterText.toLowerCase();
+    return entries.filter(([p, v]) => p.toLowerCase().includes(q) || v.toLowerCase().includes(q));
+  }, [inlineStyles, filterText]);
+
   return (
     <div className="style-inspector-container">
+      {/* Chrome DevTools Elements Tree View (Upside Collapsible Panel) */}
+      {showDomTree && (
+        <div
+          style={{
+            maxHeight: "220px",
+            minHeight: "100px",
+            overflow: "auto",
+            padding: "8px",
+            background: "#ffffff",
+            borderBottom: "1px solid #e2e8f0",
+            flexShrink: 0,
+            boxShadow: "inset 0 1px 3px rgba(0,0,0,0.04)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", padding: "0 4px" }}>
+            <span style={{ fontSize: "10.5px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              DOM Elements Tree
+            </span>
+            <span style={{ fontSize: "10px", color: "#94a3b8" }}>
+              Click any element to inspect & edit styles
+            </span>
+          </div>
+
+          {domRoot ? (
+            <DomTreeNode
+              element={domRoot}
+              selectedElement={selectedElement}
+              onSelectElement={(el) => onSelectElement && onSelectElement(el)}
+              depth={0}
+            />
+          ) : selectedElement ? (
+            <DomTreeNode
+              element={(selectedElement.closest(".email-direct-dom-root") as HTMLElement) || selectedElement}
+              selectedElement={selectedElement}
+              onSelectElement={(el) => onSelectElement && onSelectElement(el)}
+              depth={0}
+            />
+          ) : (
+            <div style={{ fontSize: "11px", color: "#94a3b8", padding: "8px" }}>
+              Click an element on the canvas to view its DOM structure
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Chrome DevTools DOM Hierarchy Breadcrumb Bar */}
+      {selectedElement && (
+        <div
+          className="devtools-breadcrumb-bar"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            padding: "6px 10px",
+            background: "#f1f5f9",
+            borderBottom: "1px solid #e2e8f0",
+            overflowX: "auto",
+            whiteSpace: "nowrap",
+            fontSize: "11px",
+            flexShrink: 0,
+          }}
+        >
+          {/* Parent Traverser */}
+          {selectedElement.parentElement && !selectedElement.parentElement.classList.contains("email-direct-dom-root") && (
+            <button
+              type="button"
+              onClick={() => onSelectElement && onSelectElement(selectedElement.parentElement!)}
+              title="Select Parent Container (↑)"
+              style={{
+                padding: "2px 6px",
+                borderRadius: "4px",
+                border: "1px solid #cbd5e1",
+                background: "#ffffff",
+                color: "#4f46e5",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+                fontWeight: "700",
+                fontSize: "10.5px",
+                flexShrink: 0,
+              }}
+            >
+              <ChevronUp size={11} />
+              <span>Parent</span>
+            </button>
+          )}
+
+          {/* Child Traverser */}
+          {selectedElement.firstElementChild && (
+            <button
+              type="button"
+              onClick={() => onSelectElement && onSelectElement(selectedElement.firstElementChild as HTMLElement)}
+              title="Select First Child Element (↓)"
+              style={{
+                padding: "2px 6px",
+                borderRadius: "4px",
+                border: "1px solid #cbd5e1",
+                background: "#ffffff",
+                color: "#059669",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+                fontWeight: "700",
+                fontSize: "10.5px",
+                flexShrink: 0,
+              }}
+            >
+              <ChevronDown size={11} />
+              <span>Child</span>
+            </button>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", gap: "3px", overflowX: "auto", minWidth: 0 }}>
+            {domHierarchy.map((el, i) => {
+              const isCurrent = el === selectedElement;
+              const tag = el.tagName.toLowerCase();
+              const classList = Array.from(el.classList).filter(c => !c.startsWith("editor-"));
+              const classStr = classList.length > 0 ? `.${classList[0]}` : "";
+              const label = `${tag}${classStr}`;
+
+              return (
+                <React.Fragment key={i}>
+                  {i > 0 && <span style={{ color: "#94a3b8", fontSize: "10px", flexShrink: 0 }}>›</span>}
+                  <button
+                    type="button"
+                    onClick={() => onSelectElement && onSelectElement(el)}
+                    style={{
+                      padding: "2px 5px",
+                      borderRadius: "4px",
+                      border: isCurrent ? "1px solid #4f46e5" : "1px solid transparent",
+                      background: isCurrent ? "#4f46e5" : "transparent",
+                      color: isCurrent ? "#ffffff" : "#475569",
+                      fontWeight: isCurrent ? "700" : "500",
+                      cursor: "pointer",
+                      fontSize: "10.5px",
+                      fontFamily: "ui-monospace, monospace",
+                      flexShrink: 0,
+                      maxWidth: "150px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={`Click to target <${tag}${classList.length > 0 ? ` class="${classList.join(" ")}"` : ""}>`}
+                  >
+                    {label}
+                  </button>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Chrome DevTools Filter & Action Bar */}
       <div className="devtools-filter-bar">
         <div className="filter-input-wrapper">
@@ -275,8 +620,22 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
           <button className="tool-btn">
             <SlidersHorizontal size={13} />
           </button>
-          <button className="tool-btn">
-            <HelpCircle size={13} />
+          <button 
+            className="tool-btn"
+            onClick={() => setShowDomTree((prev) => !prev)}
+            title={showDomTree ? "Hide DOM Elements Tree" : "Show DOM Elements Tree (↑)"}
+            style={{
+              background: showDomTree ? "#e0e7ff" : "transparent",
+              color: showDomTree ? "#4f46e5" : "#64748b",
+            }}
+          >
+            <ChevronUp
+              size={13}
+              style={{
+                transform: showDomTree ? "rotate(180deg)" : "none",
+                transition: "transform 0.15s ease",
+              }}
+            />
           </button>
         </div>
       </div>

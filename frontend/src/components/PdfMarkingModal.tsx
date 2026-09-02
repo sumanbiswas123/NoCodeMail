@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { 
   X, 
   Layers, 
@@ -13,21 +13,29 @@ import {
   Square, 
   Info,
   ChevronRight,
+  ChevronLeft,
   RefreshCw,
   Maximize,
   Minimize,
   Sliders,
-  Sparkles
+  Sparkles,
+  ArrowLeft,
+  Search,
+  CheckCircle2,
+  Globe,
+  Building2,
+  Check
 } from "lucide-react";
-import { nativeIPC, PDFComponent, PDFPageComponentsData, MarkedRegion } from "../services/ipc";
+import { nativeIPC, PDFComponent, PDFPageComponentsData, MarkedRegion, FooterPreset } from "../services/ipc";
 
 interface PdfMarkingModalProps {
   pdfPath: string;
   targetPage?: number;
   emailWidth?: number;
   onClose: () => void;
-  onConfirm: (markedRegions: MarkedRegion[]) => void;
+  onConfirm: (markedRegions: MarkedRegion[], selectedFooter: FooterPreset | null) => void;
 }
+
 
 export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   pdfPath,
@@ -40,6 +48,17 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   const [markedRegions, setMarkedRegions] = useState<MarkedRegion[]>([]);
   const [activeDrawing, setActiveDrawing] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
   const [selectedMarkId, setSelectedMarkId] = useState<string | null>(null);
+
+  // Studio Step: 1 = Component & Region Marking, 2 = Regulatory Footer Selection
+  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
+
+  // Footer Preset Selection State
+  const [footerPresets, setFooterPresets] = useState<FooterPreset[]>([]);
+  const [loadingFooters, setLoadingFooters] = useState<boolean>(false);
+  const [footerSearch, setFooterSearch] = useState<string>("");
+  const [selectedFooterIndex, setSelectedFooterIndex] = useState<number>(0);
+  const [selectedFooter, setSelectedFooter] = useState<FooterPreset | null>(null);
+  const [applyFooterPreset, setApplyFooterPreset] = useState<boolean>(true);
   
   // Toggles for layer overlays
   const [showTextOverlay, setShowTextOverlay] = useState(true);
@@ -75,6 +94,48 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   useEffect(() => {
     loadComponents();
   }, [loadComponents]);
+
+  // Load footer presets dynamically
+  useEffect(() => {
+    let isMounted = true;
+    const loadFooters = async () => {
+      setLoadingFooters(true);
+      const data = await nativeIPC.fetchFooterPresets();
+      if (isMounted && data && data.length > 0) {
+        setFooterPresets(data);
+        setSelectedFooter(data[0]);
+        setSelectedFooterIndex(0);
+      }
+      if (isMounted) setLoadingFooters(false);
+    };
+    loadFooters();
+    return () => { isMounted = false; };
+  }, []);
+
+  const filteredFooters = useMemo(() => {
+    if (!footerSearch.trim()) return footerPresets;
+    const q = footerSearch.toLowerCase().trim();
+    return footerPresets.filter(f => f.country.toLowerCase().includes(q));
+  }, [footerPresets, footerSearch]);
+
+  const handleSelectFooter = (preset: FooterPreset, idx: number) => {
+    setSelectedFooter(preset);
+    setSelectedFooterIndex(idx);
+  };
+
+  const handlePrevFooter = () => {
+    if (filteredFooters.length === 0) return;
+    const nextIdx = (selectedFooterIndex - 1 + filteredFooters.length) % filteredFooters.length;
+    setSelectedFooterIndex(nextIdx);
+    setSelectedFooter(filteredFooters[nextIdx]);
+  };
+
+  const handleNextFooter = () => {
+    if (filteredFooters.length === 0) return;
+    const nextIdx = (selectedFooterIndex + 1) % filteredFooters.length;
+    setSelectedFooterIndex(nextIdx);
+    setSelectedFooter(filteredFooters[nextIdx]);
+  };
 
   // Touchpad pinch-to-zoom & Ctrl+Wheel listener on canvas area
   useEffect(() => {
@@ -509,7 +570,7 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
   };
 
   const handleConfirmAndProceed = () => {
-    onConfirm(markedRegions);
+    onConfirm(markedRegions, applyFooterPreset ? selectedFooter : null);
   };
 
   const textComponents = pageData?.components.filter(c => c.type === "text") || [];
@@ -547,157 +608,229 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
           color: "#0f172a",
         }}
       >
-        {/* Top Header Bar - Clean Light Theme */}
+        {/* Top Header Bar - Clean Modern Light Theme */}
         <div style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "16px 24px",
-          background: "linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)",
+          padding: "12px 20px",
+          background: "#ffffff",
           borderBottom: "1px solid #e2e8f0",
+          gap: "16px",
         }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-            <div style={{
-              width: "38px",
-              height: "38px",
-              borderRadius: "10px",
-              background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#ffffff",
-              boxShadow: "0 4px 12px rgba(79, 70, 229, 0.25)",
-            }}>
-              <Crop size={20} />
-            </div>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <h3 style={{ fontSize: "17px", fontWeight: "700", color: "#0f172a", margin: 0, letterSpacing: "-0.01em" }}>
-                  PDF Marking & Component Inspector
+          {/* Left: Title & Step Navigation */}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+            {currentStep === 2 ? (
+              <button
+                type="button"
+                onClick={() => setCurrentStep(1)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "6px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid #cbd5e1",
+                  background: "#f8fafc",
+                  color: "#334155",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                  flexShrink: 0,
+                }}
+              >
+                <ArrowLeft size={14} />
+                <span>Back to Markup</span>
+              </button>
+            ) : (
+              <div style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "8px",
+                background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#ffffff",
+                flexShrink: 0,
+              }}>
+                <Crop size={16} />
+              </div>
+            )}
+
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h3 style={{ fontSize: "15px", fontWeight: "700", color: "#0f172a", margin: 0, whiteSpace: "nowrap" }}>
+                  {currentStep === 1 ? "Component & Graphic Markup" : "Compliance Footer Studio"}
                 </h3>
                 <span style={{
-                  fontSize: "11px",
+                  fontSize: "10.5px",
                   fontWeight: "700",
-                  padding: "3px 9px",
-                  borderRadius: "6px",
-                  background: "#e0e7ff",
-                  color: "#4338ca",
-                  border: "1px solid #c7d2fe",
+                  padding: "2px 7px",
+                  borderRadius: "5px",
+                  background: currentStep === 1 ? "#e0e7ff" : "#dcfce7",
+                  color: currentStep === 1 ? "#4338ca" : "#15803d",
+                  border: currentStep === 1 ? "1px solid #c7d2fe" : "1px solid #bbf7d0",
+                  whiteSpace: "nowrap",
+                }}>
+                  Step {currentStep} of 2
+                </span>
+                <span style={{
+                  fontSize: "10.5px",
+                  fontWeight: "600",
+                  padding: "2px 7px",
+                  borderRadius: "5px",
+                  background: "#f1f5f9",
+                  color: "#64748b",
+                  border: "1px solid #e2e8f0",
+                  whiteSpace: "nowrap",
                 }}>
                   Page {targetPage} of {pageData?.total_pages || 1}
                 </span>
-                {ptWidth > 0 && (
-                  <span style={{
-                    fontSize: "11px",
-                    fontWeight: "600",
-                    padding: "3px 9px",
-                    borderRadius: "6px",
-                    background: "#f1f5f9",
-                    color: "#475569",
-                    border: "1px solid #e2e8f0",
-                  }}>
-                    Email Width: {renderedWidthPx}px ({ptWidth} × {ptHeight} pt)
-                  </span>
-                )}
               </div>
-              <p style={{ fontSize: "12px", color: "#64748b", margin: "3px 0 0 0" }}>
-                Review detected text & images, or <strong>drag on the canvas</strong> to mark sections to extract as clean, isolated <strong>transparent PNGs</strong>.
-              </p>
             </div>
           </div>
 
-          {/* Top Right Zoom Controls */}
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              background: "#f1f5f9",
-              borderRadius: "8px",
-              padding: "3px 4px",
-              border: "1px solid #e2e8f0",
-              gap: "2px",
-            }}>
-              <button 
-                type="button"
-                onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))}
-                style={{ background: "transparent", border: "none", color: "#475569", padding: "5px 7px", cursor: "pointer", borderRadius: "6px" }}
-                title="Zoom Out"
-              >
-                <ZoomOut size={15} />
-              </button>
-              <span style={{ fontSize: "12px", fontWeight: "700", color: "#334155", minWidth: "48px", textAlign: "center" }}>
-                {Math.round(zoom * 100)}%
-              </span>
-              <button 
-                type="button"
-                onClick={() => setZoom(prev => Math.min(2.5, prev + 0.1))}
-                style={{ background: "transparent", border: "none", color: "#475569", padding: "5px 7px", cursor: "pointer", borderRadius: "6px" }}
-                title="Zoom In"
-              >
-                <ZoomIn size={15} />
-              </button>
-              <div style={{ width: "1px", height: "16px", background: "#cbd5e1", margin: "0 2px" }}></div>
-              <button 
-                type="button"
-                onClick={handleFitWidth}
-                style={{
-                  background: "#ffffff",
-                  border: "1px solid #cbd5e1",
-                  color: "#4338ca",
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  padding: "4px 8px",
-                  cursor: "pointer",
-                  borderRadius: "5px",
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                }}
-                title="Fit Width (Standard Full Email View)"
-              >
-                Fit Width
-              </button>
-              <button 
-                type="button"
-                onClick={() => setZoom(1.0)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#64748b",
-                  fontSize: "11px",
-                  fontWeight: "600",
-                  padding: "4px 8px",
-                  cursor: "pointer",
-                  borderRadius: "5px",
-                }}
-                title="Reset to 720px 100%"
-              >
-                100% (720px)
-              </button>
-              <button 
-                type="button"
-                onClick={handleFitHeight}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#64748b",
-                  fontSize: "11px",
-                  fontWeight: "600",
-                  padding: "4px 8px",
-                  cursor: "pointer",
-                  borderRadius: "5px",
-                }}
-                title="Fit Full Height"
-              >
-                Fit Height
-              </button>
-            </div>
+          {/* Center: Zoom Controls */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            background: "#f8fafc",
+            borderRadius: "8px",
+            padding: "2px 4px",
+            border: "1px solid #e2e8f0",
+            gap: "2px",
+            flexShrink: 0,
+          }}>
+            <button 
+              type="button"
+              onClick={() => setZoom(prev => Math.max(0.5, prev - 0.1))}
+              style={{ background: "transparent", border: "none", color: "#64748b", padding: "4px 6px", cursor: "pointer", borderRadius: "5px" }}
+              title="Zoom Out"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <span style={{ fontSize: "11.5px", fontWeight: "700", color: "#334155", minWidth: "42px", textAlign: "center" }}>
+              {Math.round(zoom * 100)}%
+            </span>
+            <button 
+              type="button"
+              onClick={() => setZoom(prev => Math.min(2.5, prev + 0.1))}
+              style={{ background: "transparent", border: "none", color: "#64748b", padding: "4px 6px", cursor: "pointer", borderRadius: "5px" }}
+              title="Zoom In"
+            >
+              <ZoomIn size={14} />
+            </button>
+            <div style={{ width: "1px", height: "14px", background: "#cbd5e1", margin: "0 2px" }}></div>
+            <button 
+              type="button"
+              onClick={handleFitWidth}
+              style={{
+                background: "#ffffff",
+                border: "1px solid #cbd5e1",
+                color: "#4338ca",
+                fontSize: "11px",
+                fontWeight: "600",
+                padding: "3px 7px",
+                cursor: "pointer",
+                borderRadius: "4px",
+              }}
+              title="Fit Width"
+            >
+              Fit Width
+            </button>
+          </div>
+
+          {/* Right: Primary Unified CTA & Close */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+            {currentStep === 1 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onConfirm(markedRegions, null)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#64748b",
+                    fontSize: "11.5px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    padding: "6px 10px",
+                  }}
+                >
+                  Extract Directly
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep(2)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "7px 14px",
+                    borderRadius: "8px",
+                    background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+                    border: "none",
+                    color: "#ffffff",
+                    fontSize: "12.5px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(79, 70, 229, 0.25)",
+                  }}
+                >
+                  <span>Continue to Footer</span>
+                  <ChevronRight size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onConfirm(markedRegions, null)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#64748b",
+                    fontSize: "11.5px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    padding: "6px 10px",
+                  }}
+                >
+                  Skip Footer
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmAndProceed}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "7px 16px",
+                    borderRadius: "8px",
+                    background: "linear-gradient(135deg, #059669, #10b981)",
+                    border: "none",
+                    color: "#ffffff",
+                    fontSize: "12.5px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(16, 185, 129, 0.25)",
+                  }}
+                >
+                  <Check size={14} strokeWidth={3} />
+                  <span>Start Extraction</span>
+                </button>
+              </>
+            )}
 
             <button 
               type="button" 
               onClick={onClose}
               style={{
-                width: "34px",
-                height: "34px",
-                borderRadius: "8px",
+                width: "30px",
+                height: "30px",
+                borderRadius: "6px",
                 background: "#f1f5f9",
                 border: "1px solid #e2e8f0",
                 color: "#64748b",
@@ -705,149 +838,129 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
                 alignItems: "center",
                 justifyContent: "center",
                 cursor: "pointer",
-                transition: "all 0.15s ease",
               }}
-              title="Close modal"
+              title="Close"
             >
-              <X size={17} />
+              <X size={15} />
             </button>
           </div>
         </div>
 
-        {/* Toolbar & Layer Filter Toggles */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "10px 24px",
-          background: "#f8fafc",
-          borderBottom: "1px solid #e2e8f0",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ fontSize: "11.5px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              Component Overlays:
-            </span>
+        {/* Step 1 ONLY: Compact Component Filter Bar */}
+        {currentStep === 1 && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "6px 20px",
+            background: "#f8fafc",
+            borderBottom: "1px solid #e2e8f0",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "11px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                Layers:
+              </span>
 
-            {/* Text Toggle */}
-            <button
-              type="button"
-              onClick={() => setShowTextOverlay(!showTextOverlay)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "5px 12px",
-                borderRadius: "7px",
-                fontSize: "12px",
-                fontWeight: "600",
-                background: showTextOverlay ? "#eff6ff" : "#ffffff",
-                color: showTextOverlay ? "#2563eb" : "#94a3b8",
-                border: showTextOverlay ? "1px solid #bfdbfe" : "1px solid #e2e8f0",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                boxShadow: showTextOverlay ? "0 1px 3px rgba(37, 99, 235, 0.1)" : "none",
-              }}
-            >
-              <Type size={13} />
-              <span>Text ({textComponents.length})</span>
-              {showTextOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
-            </button>
+              {/* Text Toggle */}
+              <button
+                type="button"
+                onClick={() => setShowTextOverlay(!showTextOverlay)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "6px",
+                  fontSize: "11.5px",
+                  fontWeight: "600",
+                  background: showTextOverlay ? "#eff6ff" : "#ffffff",
+                  color: showTextOverlay ? "#2563eb" : "#94a3b8",
+                  border: showTextOverlay ? "1px solid #bfdbfe" : "1px solid #e2e8f0",
+                  cursor: "pointer",
+                }}
+              >
+                <Type size={12} />
+                <span>Text ({textComponents.length})</span>
+                {showTextOverlay ? <Eye size={11} /> : <EyeOff size={11} />}
+              </button>
 
-            {/* Image Toggle */}
-            <button
-              type="button"
-              onClick={() => setShowImageOverlay(!showImageOverlay)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "5px 12px",
-                borderRadius: "7px",
-                fontSize: "12px",
-                fontWeight: "600",
-                background: showImageOverlay ? "#ecfdf5" : "#ffffff",
-                color: showImageOverlay ? "#059669" : "#94a3b8",
-                border: showImageOverlay ? "1px solid #a7f3d0" : "1px solid #e2e8f0",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                boxShadow: showImageOverlay ? "0 1px 3px rgba(5, 150, 105, 0.1)" : "none",
-              }}
-            >
-              <ImageIcon size={13} />
-              <span>Images ({imageComponents.length})</span>
-              {showImageOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
-            </button>
+              {/* Image Toggle */}
+              <button
+                type="button"
+                onClick={() => setShowImageOverlay(!showImageOverlay)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "6px",
+                  fontSize: "11.5px",
+                  fontWeight: "600",
+                  background: showImageOverlay ? "#ecfdf5" : "#ffffff",
+                  color: showImageOverlay ? "#059669" : "#94a3b8",
+                  border: showImageOverlay ? "1px solid #a7f3d0" : "1px solid #e2e8f0",
+                  cursor: "pointer",
+                }}
+              >
+                <ImageIcon size={12} />
+                <span>Images ({imageComponents.length})</span>
+                {showImageOverlay ? <Eye size={11} /> : <EyeOff size={11} />}
+              </button>
 
-            {/* Shape Toggle */}
-            <button
-              type="button"
-              onClick={() => setShowPathOverlay(!showPathOverlay)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "5px 12px",
-                borderRadius: "7px",
-                fontSize: "12px",
-                fontWeight: "600",
-                background: showPathOverlay ? "#fffbeb" : "#ffffff",
-                color: showPathOverlay ? "#d97706" : "#94a3b8",
-                border: showPathOverlay ? "1px solid #fde68a" : "1px solid #e2e8f0",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                boxShadow: showPathOverlay ? "0 1px 3px rgba(217, 119, 6, 0.1)" : "none",
-              }}
-            >
-              <Square size={13} />
-              <span>Shapes & Cards ({pathComponents.length})</span>
-              {showPathOverlay ? <Eye size={12} /> : <EyeOff size={12} />}
-            </button>
+              {/* Shape Toggle */}
+              <button
+                type="button"
+                onClick={() => setShowPathOverlay(!showPathOverlay)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "6px",
+                  fontSize: "11.5px",
+                  fontWeight: "600",
+                  background: showPathOverlay ? "#fffbeb" : "#ffffff",
+                  color: showPathOverlay ? "#d97706" : "#94a3b8",
+                  border: showPathOverlay ? "1px solid #fde68a" : "1px solid #e2e8f0",
+                  cursor: "pointer",
+                }}
+              >
+                <Square size={12} />
+                <span>Shapes ({pathComponents.length})</span>
+                {showPathOverlay ? <Eye size={11} /> : <EyeOff size={11} />}
+              </button>
 
-            <div style={{ width: "1px", height: "18px", background: "#cbd5e1", margin: "0 4px" }}></div>
+              <div style={{ width: "1px", height: "14px", background: "#cbd5e1", margin: "0 2px" }}></div>
 
-            {/* Smart Magnetic Snap Toggle */}
-            <button
-              type="button"
-              onClick={() => setSmartSnap(!smartSnap)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "5px 12px",
-                borderRadius: "7px",
-                fontSize: "12px",
-                fontWeight: "700",
-                background: smartSnap ? "#f5f3ff" : "#ffffff",
-                color: smartSnap ? "#7c3aed" : "#94a3b8",
-                border: smartSnap ? "1px solid #c4b5fd" : "1px solid #e2e8f0",
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-                boxShadow: smartSnap ? "0 1px 4px rgba(124, 58, 237, 0.2)" : "none",
-              }}
-              title="Automatically snaps & expands drag selections to enclose entire card containers & graphics"
-            >
-              <span>🧲 Smart Snap: {smartSnap ? "Active (Auto-Enclose)" : "Off"}</span>
-            </button>
-          </div>
+              {/* Smart Magnetic Snap Toggle */}
+              <button
+                type="button"
+                onClick={() => setSmartSnap(!smartSnap)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "6px",
+                  fontSize: "11.5px",
+                  fontWeight: "600",
+                  background: smartSnap ? "#f5f3ff" : "#ffffff",
+                  color: smartSnap ? "#7c3aed" : "#94a3b8",
+                  border: smartSnap ? "1px solid #c4b5fd" : "1px solid #e2e8f0",
+                  cursor: "pointer",
+                }}
+                title="Automatically snaps drag selections to enclose graphics"
+              >
+                <span>🧲 Smart Snap: {smartSnap ? "On" : "Off"}</span>
+              </button>
+            </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{
-              fontSize: "12px",
-              color: "#7c3aed",
-              fontWeight: "600",
-              background: "#f5f3ff",
-              padding: "4px 12px",
-              borderRadius: "6px",
-              border: "1px solid #ddd6fe",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-            }}>
-              <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#7c3aed" }}></span>
-              Drag or Click any component to mark
+            <span style={{ fontSize: "11px", color: "#64748b" }}>
+              Drag on canvas to mark sections
             </span>
           </div>
-        </div>
+        )}
+
 
         {/* Modal Center Body: Canvas + Right Sidebar */}
         <div style={{ display: "flex", flex: "1 1 auto", minHeight: 0, overflow: "hidden" }}>
@@ -1342,142 +1455,91 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
             ) : null}
           </div>
 
-          {/* Right Sidebar: Inspection Summary, Layer Peeler & Marked Regions */}
-          <div style={{
-            width: "360px",
-            flexShrink: 0,
-            background: "#ffffff",
-            borderLeft: "1px solid #e2e8f0",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-          }}>
-            {/* Sidebar Scrollable Body */}
-            <div style={{ padding: "16px 20px", overflowY: "auto", flex: "1 1 auto" }}>
-              {/* Tab Switcher: Marked Regions vs Layer Peeler */}
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "4px",
-                background: "#f1f5f9",
-                padding: "3px",
-                borderRadius: "9px",
-                marginBottom: "14px",
-              }}>
-                <button
-                  type="button"
-                  onClick={() => setActiveSidebarTab("marked")}
-                  style={{
-                    padding: "7px 10px",
-                    borderRadius: "7px",
-                    fontSize: "12px",
-                    fontWeight: activeSidebarTab === "marked" ? "700" : "600",
-                    background: activeSidebarTab === "marked" ? "#ffffff" : "transparent",
-                    color: activeSidebarTab === "marked" ? "#7c3aed" : "#64748b",
-                    border: "none",
-                    cursor: "pointer",
-                    boxShadow: activeSidebarTab === "marked" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
-                    transition: "all 0.15s ease",
-                    whiteSpace: "nowrap",
-                    textAlign: "center",
-                  }}
-                >
-                  Marked Areas ({markedRegions.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSidebarTab("layers")}
-                  style={{
-                    padding: "7px 10px",
-                    borderRadius: "7px",
-                    fontSize: "12px",
-                    fontWeight: activeSidebarTab === "layers" ? "700" : "600",
-                    background: activeSidebarTab === "layers" ? "#ffffff" : "transparent",
-                    color: activeSidebarTab === "layers" ? "#7c3aed" : "#64748b",
-                    border: "none",
-                    cursor: "pointer",
-                    boxShadow: activeSidebarTab === "layers" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
-                    transition: "all 0.15s ease",
-                    whiteSpace: "nowrap",
-                    textAlign: "center",
-                  }}
-                >
-                  Layer Peeler{hiddenComponentIds.size > 0 ? ` (${hiddenComponentIds.size})` : ""}
-                </button>
-              </div>
+          {/* Step 1 Right Sidebar: Inspection Summary, Layer Peeler & Marked Regions */}
+          {currentStep === 1 && (
 
-              {activeSidebarTab === "marked" ? (
-                <>
-                  {/* Component Stats Card */}
-                  <div style={{
-                    background: "#f8fafc",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: "12px",
-                    padding: "12px",
-                    marginBottom: "16px",
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                      <Layers size={15} color="#4f46e5" />
-                      <span style={{ fontSize: "12.5px", fontWeight: "700", color: "#0f172a" }}>Detected Elements</span>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
-                      <div style={{ background: "#eff6ff", borderRadius: "8px", padding: "6px 4px", border: "1px solid #bfdbfe" }}>
-                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#1d4ed8" }}>{textComponents.length}</div>
-                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Text Spans</div>
-                      </div>
-                      <div style={{ background: "#ecfdf5", borderRadius: "8px", padding: "6px 4px", border: "1px solid #a7f3d0" }}>
-                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#047857" }}>{imageComponents.length}</div>
-                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Images</div>
-                      </div>
-                      <div style={{ background: "#fffbeb", borderRadius: "8px", padding: "6px 4px", border: "1px solid #fde68a" }}>
-                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#b45309" }}>{pathComponents.length}</div>
-                        <div style={{ fontSize: "10px", color: "#64748b", fontWeight: "600" }}>Shapes</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Marked Sections Header */}
-                  <div style={{ marginBottom: "12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: "12.5px", fontWeight: "700", color: "#0f172a" }}>
-                      Marked Image Sections ({markedRegions.length})
-                    </span>
-                    {markedRegions.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={handleClearAll}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          color: "#ef4444",
-                          fontSize: "11px",
-                          fontWeight: "700",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Clear All
-                      </button>
-                    )}
-                  </div>
-
-                  {markedRegions.length === 0 ? (
-                    <div style={{
-                      padding: "24px 16px",
-                      borderRadius: "10px",
-                      border: "1.5px dashed #cbd5e1",
-                      background: "#f8fafc",
-                      textAlign: "center",
-                      color: "#64748b",
+            <div style={{
+              width: "360px",
+              flexShrink: 0,
+              background: "#ffffff",
+              borderLeft: "1px solid #e2e8f0",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+            }}>
+              {/* Sidebar Scrollable Body */}
+              <div style={{ padding: "16px 20px", overflowY: "auto", flex: "1 1 auto" }}>
+                {/* Tab Switcher: Marked Regions vs Layer Peeler */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "4px",
+                  background: "#f1f5f9",
+                  padding: "3px",
+                  borderRadius: "9px",
+                  marginBottom: "14px",
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSidebarTab("marked")}
+                    style={{
+                      padding: "7px 10px",
+                      borderRadius: "7px",
                       fontSize: "12px",
-                    }}>
-                      <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#f5f3ff", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}>
-                        <Crop size={18} />
+                      fontWeight: activeSidebarTab === "marked" ? "700" : "600",
+                      background: activeSidebarTab === "marked" ? "#ffffff" : "transparent",
+                      color: activeSidebarTab === "marked" ? "#7c3aed" : "#64748b",
+                      border: "none",
+                      cursor: "pointer",
+                      boxShadow: activeSidebarTab === "marked" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                      transition: "all 0.15s ease",
+                      whiteSpace: "nowrap",
+                      textAlign: "center",
+                    }}
+                  >
+                    Marked Areas ({markedRegions.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSidebarTab("layers")}
+                    style={{
+                      padding: "7px 10px",
+                      borderRadius: "7px",
+                      fontSize: "12px",
+                      fontWeight: activeSidebarTab === "layers" ? "700" : "600",
+                      background: activeSidebarTab === "layers" ? "#ffffff" : "transparent",
+                      color: activeSidebarTab === "layers" ? "#7c3aed" : "#64748b",
+                      border: "none",
+                      cursor: "pointer",
+                      boxShadow: activeSidebarTab === "layers" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                      transition: "all 0.15s ease",
+                      whiteSpace: "nowrap",
+                      textAlign: "center",
+                    }}
+                  >
+                    Layer Peeler{hiddenComponentIds.size > 0 ? ` (${hiddenComponentIds.size})` : ""}
+                  </button>
+                </div>
+
+                {activeSidebarTab === "marked" ? (
+                  <>
+                    {/* Component Stats Card */}
+                    {markedRegions.length === 0 ? (
+                      <div style={{
+                        background: "#f8fafc",
+                        borderRadius: "10px",
+                        padding: "16px",
+                        textAlign: "center",
+                      }}>
+                        <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#f5f3ff", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 10px" }}>
+                          <Crop size={18} />
+                        </div>
+                        <p style={{ margin: "0 0 4px 0", color: "#0f172a", fontWeight: "700" }}>No sections marked</p>
+                        <span style={{ fontSize: "11.5px", lineHeight: "1.45", color: "#64748b" }}>
+                          Drag on the document canvas to mark complex areas (badges, hero banners, artwork with text).
+                        </span>
                       </div>
-                      <p style={{ margin: "0 0 4px 0", color: "#0f172a", fontWeight: "700" }}>No sections marked</p>
-                      <span style={{ fontSize: "11.5px", lineHeight: "1.45", color: "#64748b" }}>
-                        Drag on the document canvas to mark complex areas (badges, hero banners, artwork with text).
-                      </span>
-                    </div>
-                  ) : (
+                    ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                       {markedRegions.map((region, i) => {
                         const isSel = selectedMarkId === region.id;
@@ -1759,60 +1821,335 @@ export const PdfMarkingModal: React.FC<PdfMarkingModalProps> = ({
               </div>
             </div>
 
-            {/* Sidebar Bottom Action Bar */}
+            {/* Step 1 Sidebar Bottom Action Bar */}
             <div style={{
-              padding: "16px 20px",
+              padding: "12px 16px",
               borderTop: "1px solid #e2e8f0",
               background: "#ffffff",
               display: "flex",
-              flexDirection: "column",
-              gap: "10px",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "8px",
             }}>
-              <button
-                type="button"
-                onClick={handleConfirmAndProceed}
-                style={{
-                  width: "100%",
-                  padding: "12px 16px",
-                  borderRadius: "10px",
-                  background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-                  border: "none",
-                  color: "#ffffff",
-                  fontSize: "13.5px",
-                  fontWeight: "700",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  cursor: "pointer",
-                  boxShadow: "0 4px 14px rgba(79, 70, 229, 0.3)",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <span>{markedRegions.length > 0 ? `Continue with ${markedRegions.length} Marked Areas` : "Continue to Extraction"}</span>
-                <ChevronRight size={16} />
-              </button>
+              <span style={{ fontSize: "11.5px", color: "#64748b", fontWeight: "600" }}>
+                {markedRegions.length} {markedRegions.length === 1 ? "area" : "areas"} marked
+              </span>
 
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => setCurrentStep(2)}
                 style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  background: "transparent",
+                  padding: "8px 16px",
+                  borderRadius: "8px",
+                  background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
                   border: "none",
-                  color: "#64748b",
-                  fontSize: "12px",
-                  fontWeight: "600",
+                  color: "#ffffff",
+                  fontSize: "12.5px",
+                  fontWeight: "700",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
                   cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(79, 70, 229, 0.25)",
                 }}
               >
-                Back to Selection
+                <span>Continue to Footer</span>
+                <ChevronRight size={14} />
               </button>
             </div>
           </div>
+          )}
+
+          {/* Step 2 Right Pane: Dedicated Interactive Compliance Footer Studio */}
+          {currentStep === 2 && (
+            <div style={{
+              width: "560px",
+              flexShrink: 0,
+              background: "#f8fafc",
+              borderLeft: "1px solid #e2e8f0",
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              overflow: "hidden",
+            }}>
+              {/* Top Controls: Search + Navigation Toolbar */}
+              <div style={{ padding: "14px 16px 10px 16px", borderBottom: "1px solid #e2e8f0", background: "#ffffff" }}>
+                {/* Search Bar + Prev/Next in One Unified Line */}
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                  <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center" }}>
+                    <Search size={14} color="#94a3b8" style={{ position: "absolute", left: "10px" }} />
+                    <input
+                      type="text"
+                      placeholder="Search 120+ presets (e.g. India, Corporate, CL, SV)..."
+                      value={footerSearch}
+                      onChange={(e) => {
+                        setFooterSearch(e.target.value);
+                        setSelectedFooterIndex(0);
+                      }}
+                      style={{
+                        width: "100%",
+                        padding: "7px 30px 7px 30px",
+                        borderRadius: "7px",
+                        border: "1px solid #cbd5e1",
+                        fontSize: "12px",
+                        outline: "none",
+                        background: "#f8fafc",
+                      }}
+                    />
+                    {footerSearch && (
+                      <button
+                        onClick={() => setFooterSearch("")}
+                        style={{ position: "absolute", right: "8px", background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "3px", background: "#f1f5f9", padding: "2px 4px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <button
+                      type="button"
+                      onClick={handlePrevFooter}
+                      disabled={filteredFooters.length === 0}
+                      style={{
+                        padding: "4px 6px",
+                        borderRadius: "4px",
+                        border: "none",
+                        background: "transparent",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        color: "#334155",
+                        cursor: filteredFooters.length === 0 ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                      title="Previous preset"
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#4f46e5", minWidth: "36px", textAlign: "center" }}>
+                      {filteredFooters.length > 0 ? `${selectedFooterIndex + 1}/${filteredFooters.length}` : "0"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleNextFooter}
+                      disabled={filteredFooters.length === 0}
+                      style={{
+                        padding: "4px 6px",
+                        borderRadius: "4px",
+                        border: "none",
+                        background: "transparent",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        color: "#334155",
+                        cursor: filteredFooters.length === 0 ? "not-allowed" : "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                      title="Next preset"
+                    >
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Compact Preset Chips Grid */}
+                <div style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "5px",
+                  maxHeight: "75px",
+                  overflowY: "auto",
+                  padding: "2px 0",
+                }}>
+                  {filteredFooters.map((preset, idx) => {
+                    const isSelected = selectedFooter?.country === preset.country;
+                    return (
+                      <button
+                        key={preset.country}
+                        type="button"
+                        onClick={() => handleSelectFooter(preset, idx)}
+                        style={{
+                          padding: "4px 8px",
+                          borderRadius: "5px",
+                          fontSize: "11px",
+                          fontWeight: isSelected ? "700" : "500",
+                          background: isSelected ? "#4f46e5" : "#ffffff",
+                          color: isSelected ? "#ffffff" : "#334155",
+                          border: isSelected ? "1px solid #4f46e5" : "1px solid #e2e8f0",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                          transition: "all 0.1s ease",
+                        }}
+                      >
+                        {isSelected && <Check size={11} color="#ffffff" />}
+                        <span>{preset.country}</span>
+                      </button>
+                    );
+                  })}
+                  {filteredFooters.length === 0 && (
+                    <div style={{ fontSize: "11px", color: "#94a3b8", padding: "4px 0" }}>
+                      No footers match "{footerSearch}".
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Enlarged Live Rendered Footer Preview Box (Takes Full Height) */}
+              <div style={{
+                flex: "1 1 auto",
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+                padding: "12px 16px",
+                overflow: "hidden",
+              }}>
+                {selectedFooter ? (
+                  <div style={{
+                    flex: "1 1 auto",
+                    background: "#ffffff",
+                    borderRadius: "10px",
+                    border: "1px solid #cbd5e1",
+                    boxShadow: "0 2px 8px rgba(0,0,0,0.04)",
+                    overflow: "hidden",
+                    display: "flex",
+                    flexDirection: "column",
+                    minHeight: 0,
+                  }}>
+                    {/* Header with Title & Apply Toggle */}
+                    <div style={{
+                      padding: "8px 12px",
+                      background: "#f8fafc",
+                      borderBottom: "1px solid #e2e8f0",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexShrink: 0,
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Globe size={14} color="#4f46e5" />
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
+                          {selectedFooter.country}
+                        </span>
+                      </div>
+
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "11.5px", fontWeight: "600", color: "#334155" }}>
+                        <input
+                          type="checkbox"
+                          checked={applyFooterPreset}
+                          onChange={(e) => setApplyFooterPreset(e.target.checked)}
+                          style={{ width: "14px", height: "14px", accentColor: "#4f46e5", cursor: "pointer" }}
+                        />
+                        <span>Apply Preset</span>
+                      </label>
+                    </div>
+
+                    {/* Scrollable Live HTML Render Area */}
+                    <div style={{
+                      flex: "1 1 auto",
+                      padding: "16px",
+                      overflowY: "auto",
+                      background: "#ffffff",
+                      fontSize: "11px",
+                      lineHeight: "1.5",
+                      color: "#334155",
+                    }}>
+                      <div 
+                        dangerouslySetInnerHTML={{ __html: selectedFooter.code }}
+                        style={{
+                          transformOrigin: "top left",
+                          width: "100%",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: "12px" }}>
+                    Select a preset above to preview
+                  </div>
+                )}
+              </div>
+
+              {/* Slim, Minimal Bottom Bar */}
+              <div style={{
+                padding: "10px 16px",
+                borderTop: "1px solid #e2e8f0",
+                background: "#ffffff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+                flexShrink: 0,
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep(1)}
+                  style={{
+                    padding: "6px 12px",
+                    background: "#f1f5f9",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: "6px",
+                    color: "#475569",
+                    fontSize: "11.5px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                >
+                  <ArrowLeft size={13} />
+                  <span>Back to Markup</span>
+                </button>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={() => onConfirm(markedRegions, null)}
+                    style={{
+                      padding: "6px 12px",
+                      background: "transparent",
+                      border: "none",
+                      color: "#64748b",
+                      fontSize: "11.5px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Skip Footer
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmAndProceed}
+                    style={{
+                      padding: "7px 16px",
+                      borderRadius: "7px",
+                      background: "linear-gradient(135deg, #059669, #10b981)",
+                      border: "none",
+                      color: "#ffffff",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      cursor: "pointer",
+                      boxShadow: "0 2px 8px rgba(16, 185, 129, 0.25)",
+                    }}
+                  >
+                    <Check size={13} strokeWidth={3} />
+                    <span>Confirm & Extract</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
+
+

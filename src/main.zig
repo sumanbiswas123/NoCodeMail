@@ -92,6 +92,15 @@ const win32_base = struct {
     extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?*anyopaque;
 };
 
+const win32_shell = struct {
+    extern "advapi32" fn RegOpenKeyExW(hKey: usize, lpSubKey: [*:0]const u16, ulOptions: u32, samDesired: u32, phkResult: *usize) callconv(.winapi) c_long;
+    extern "advapi32" fn RegEnumKeyExW(hKey: usize, dwIndex: u32, lpName: [*]u16, lpcchName: *u32, lpReserved: ?*u32, lpClass: ?[*]u16, lpcchClass: ?*u32, lpftLastWriteTime: ?*anyopaque) callconv(.winapi) c_long;
+    extern "advapi32" fn RegQueryValueExW(hKey: usize, lpValueName: ?[*:0]const u16, lpReserved: ?*u32, lpType: ?*u32, lpData: ?[*]u8, lpcbData: ?*u32) callconv(.winapi) c_long;
+    extern "advapi32" fn RegCloseKey(hKey: usize) callconv(.winapi) c_long;
+    extern "shell32" fn ShellExecuteW(hwnd: ?*anyopaque, lpOperation: ?[*:0]const u16, lpFile: [*:0]const u16, lpParameters: ?[*:0]const u16, lpDirectory: ?[*:0]const u16, nShowCmd: c_int) callconv(.winapi) usize;
+};
+
+
 fn extractEmbeddedDll(target_path: []const u8, bytes: []const u8) void {
     // Check if file already exists with same size
     if (fopen(std.heap.page_allocator.dupeZ(u8, target_path) catch return, "rb")) |fh| {
@@ -806,6 +815,196 @@ pub const App = struct {
             self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to save content\"}") catch {};
         }
     }
+
+    pub fn handleGetInstalledBrowsers(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        _ = req;
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const BrowserItem = struct {
+            id: []const u8,
+            name: []const u8,
+            path: []const u8,
+        };
+        var browser_list = std.ArrayList(BrowserItem).empty;
+        defer browser_list.deinit(alloc);
+
+        const roots = [_]usize{ 0x80000002, 0x80000001 }; // HKLM, HKCU
+        const subkey_w = std.unicode.utf8ToUtf16LeStringLiteral("SOFTWARE\\Clients\\StartMenuInternet");
+
+        for (roots) |root_hkey| {
+            var h_client: usize = 0;
+            if (win32_shell.RegOpenKeyExW(root_hkey, subkey_w, 0, 0x20019, &h_client) == 0) {
+                defer _ = win32_shell.RegCloseKey(h_client);
+
+                var idx: u32 = 0;
+                while (true) : (idx += 1) {
+                    var key_name_w: [256]u16 = undefined;
+                    var key_name_len: u32 = key_name_w.len;
+                    if (win32_shell.RegEnumKeyExW(h_client, idx, &key_name_w, &key_name_len, null, null, null, null) != 0) break;
+                    key_name_w[key_name_len] = 0;
+
+                    var key_name_u8: [512]u8 = undefined;
+                    const u8_klen = std.unicode.utf16LeToUtf8(&key_name_u8, key_name_w[0..key_name_len]) catch continue;
+                    const b_id = alloc.dupe(u8, key_name_u8[0..u8_klen]) catch continue;
+
+                    // Open browser key
+                    var h_bkey: usize = 0;
+                    if (win32_shell.RegOpenKeyExW(h_client, @ptrCast(&key_name_w), 0, 0x20019, &h_bkey) == 0) {
+                        defer _ = win32_shell.RegCloseKey(h_bkey);
+
+                        // Read display name (Default)
+                        var val_data: [512]u8 = undefined;
+                        var val_size: u32 = val_data.len;
+                        var val_type: u32 = 0;
+                        var b_name: []const u8 = b_id;
+
+                        if (win32_shell.RegQueryValueExW(h_bkey, null, null, &val_type, &val_data, &val_size) == 0 and val_size > 0) {
+                            const w_slice = @as([*]const u16, @ptrCast(@alignCast(&val_data)))[0 .. (val_size / 2)];
+                            const clean_w = std.mem.sliceTo(w_slice, 0);
+                            var name_u8: [512]u8 = undefined;
+                            if (std.unicode.utf16LeToUtf8(&name_u8, clean_w)) |n_len| {
+                                if (n_len > 0) b_name = alloc.dupe(u8, name_u8[0..n_len]) catch b_id;
+                            } else |_| {}
+                        }
+
+                        // Read command path: shell\open\command
+                        const cmd_subkey_w = std.unicode.utf8ToUtf16LeStringLiteral("shell\\open\\command");
+                        var h_cmdkey: usize = 0;
+                        var b_path: []const u8 = "";
+
+                        if (win32_shell.RegOpenKeyExW(h_bkey, cmd_subkey_w, 0, 0x20019, &h_cmdkey) == 0) {
+                            defer _ = win32_shell.RegCloseKey(h_cmdkey);
+                            var cmd_data: [1024]u8 = undefined;
+                            var cmd_size: u32 = cmd_data.len;
+                            if (win32_shell.RegQueryValueExW(h_cmdkey, null, null, null, &cmd_data, &cmd_size) == 0 and cmd_size > 0) {
+                                const w_cmd = @as([*]const u16, @ptrCast(@alignCast(&cmd_data)))[0 .. (cmd_size / 2)];
+                                const clean_cmd = std.mem.sliceTo(w_cmd, 0);
+                                var cmd_u8: [1024]u8 = undefined;
+                                if (std.unicode.utf16LeToUtf8(&cmd_u8, clean_cmd)) |c_len| {
+                                    var raw_cmd = cmd_u8[0..c_len];
+                                    if (std.mem.startsWith(u8, raw_cmd, "\"")) {
+                                        if (std.mem.indexOf(u8, raw_cmd[1..], "\"")) |q_end| {
+                                            raw_cmd = raw_cmd[1 .. 1 + q_end];
+                                        }
+                                    }
+                                    b_path = alloc.dupe(u8, raw_cmd) catch "";
+                                } else |_| {}
+                            }
+                        }
+
+                        // Avoid duplicates if both HKLM and HKCU have it
+                        var exists = false;
+                        for (browser_list.items) |existing| {
+                            if (std.mem.eql(u8, existing.name, b_name) or std.mem.eql(u8, existing.path, b_path)) {
+                                exists = true;
+                                break;
+                            }
+                        }
+
+                        // Skip obsolete IE if other modern browsers exist
+                        if (!exists and b_path.len > 0 and !std.mem.eql(u8, b_id, "IEXPLORE.EXE")) {
+                            browser_list.append(alloc, .{
+                                .id = b_id,
+                                .name = b_name,
+                                .path = b_path,
+                            }) catch {};
+                        }
+                    }
+                }
+            }
+        }
+
+        const ResStruct = struct {
+            success: bool,
+            browsers: []const BrowserItem,
+        };
+        const resp_obj = ResStruct{
+            .success = true,
+            .browsers = browser_list.items,
+        };
+        const res_json = std.fmt.allocPrintSentinel(alloc, "{f}", .{std.json.fmt(resp_obj, .{})}, 0) catch return;
+        self.w.respond(seq, .ok, res_json) catch {};
+    }
+
+    pub fn handleOpenInBrowser(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const OpenParam = struct {
+            url: ?[]const u8 = null,
+            path: ?[]const u8 = null,
+            browser_path: ?[]const u8 = null,
+        };
+
+        var target_url: []const u8 = "";
+        var browser_exe: []const u8 = "";
+
+        if (std.json.parseFromSlice([]OpenParam, alloc, req, .{})) |parsed_arr| {
+            if (parsed_arr.value.len > 0) {
+                target_url = parsed_arr.value[0].url orelse (parsed_arr.value[0].path orelse "");
+                browser_exe = parsed_arr.value[0].browser_path orelse "";
+            }
+        } else |_| {
+            if (std.json.parseFromSlice(OpenParam, alloc, req, .{})) |parsed_obj| {
+                target_url = parsed_obj.value.url orelse (parsed_obj.value.path orelse "");
+                browser_exe = parsed_obj.value.browser_path orelse "";
+            } else |_| {
+                self.w.respond(seq, .err, "{\"error\":\"Invalid arguments\"}") catch {};
+                return;
+            }
+        }
+
+        if (target_url.len == 0) {
+            self.w.respond(seq, .err, "{\"error\":\"Empty target URL/path\"}") catch {};
+            return;
+        }
+
+        var target_w: [2048]u16 = undefined;
+        const t_len = win32_base.MultiByteToWideChar(65001, 0, target_url.ptr, @intCast(target_url.len), &target_w, @intCast(target_w.len - 1));
+        if (t_len <= 0) {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Unicode conversion failed\"}") catch {};
+            return;
+        }
+        target_w[@intCast(t_len)] = 0;
+
+        const open_op_w = std.unicode.utf8ToUtf16LeStringLiteral("open");
+
+        if (browser_exe.len > 0) {
+            // Enclose the target path in quotes if it's passed as a command-line argument to avoid splitting on spaces
+            const quoted_url = if (std.mem.startsWith(u8, target_url, "\""))
+                alloc.dupe(u8, target_url) catch target_url
+            else
+                std.fmt.allocPrint(alloc, "\"{s}\"", .{target_url}) catch target_url;
+
+            var quoted_target_w: [2048]u16 = undefined;
+            const qt_len = win32_base.MultiByteToWideChar(65001, 0, quoted_url.ptr, @intCast(quoted_url.len), &quoted_target_w, @intCast(quoted_target_w.len - 1));
+            if (qt_len > 0) {
+                quoted_target_w[@intCast(qt_len)] = 0;
+
+                var browser_w: [2048]u16 = undefined;
+                const b_len = win32_base.MultiByteToWideChar(65001, 0, browser_exe.ptr, @intCast(browser_exe.len), &browser_w, @intCast(browser_w.len - 1));
+                if (b_len > 0) {
+                    browser_w[@intCast(b_len)] = 0;
+                    const ret = win32_shell.ShellExecuteW(null, open_op_w, @ptrCast(&browser_w), @ptrCast(&quoted_target_w), null, 1);
+                    if (ret > 32) {
+                        self.w.respond(seq, .ok, "{\"success\":true}") catch {};
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Fallback to default browser handler
+        const ret_def = win32_shell.ShellExecuteW(null, open_op_w, @ptrCast(&target_w), null, null, 1);
+        if (ret_def > 32) {
+            self.w.respond(seq, .ok, "{\"success\":true}") catch {};
+        } else {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to open browser\"}") catch {};
+        }
+    }
 };
 
 pub fn main() !void {
@@ -908,10 +1107,13 @@ pub fn main() !void {
     try w.bind(App, "chooseHtml", App.handleChooseHtml, &app);
     try w.bind(App, "extractPdf", App.handleExtractPdf, &app);
     try w.bind(App, "saveFile", App.handleSaveFile, &app);
+    try w.bind(App, "getInstalledBrowsers", App.handleGetInstalledBrowsers, &app);
+    try w.bind(App, "openInBrowser", App.handleOpenInBrowser, &app);
 
     // Navigate to embedded local HTTP server port 28941
     try w.navigate("http://localhost:28941/");
 
     try w.run();
 }
+
 

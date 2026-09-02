@@ -14,11 +14,11 @@ import {
   ChevronRight,
   Crop
 } from "lucide-react";
-import { nativeIPC, MarkedRegion } from "../services/ipc";
+import { nativeIPC, MarkedRegion, FooterPreset } from "../services/ipc";
 import { PdfMarkingModal } from "../components/PdfMarkingModal";
 
 interface Screen1Props {
-  onPdfSelected: (path: string, targetPage?: number, emailWidth?: number, markedRegions?: MarkedRegion[]) => void;
+  onPdfSelected: (path: string, targetPage?: number, emailWidth?: number, markedRegions?: MarkedRegion[], selectedFooter?: FooterPreset | null) => void;
   onHtmlLoaded: (path: string, content: string) => void;
 }
 
@@ -74,12 +74,13 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
     setShowMarkingModal(true);
   };
 
-  const handleMarkingModalConfirm = (markedRegions: MarkedRegion[]) => {
+  const handleMarkingModalConfirm = (markedRegions: MarkedRegion[], selectedFooter: FooterPreset | null) => {
     if (!modalPdfPath) return;
     const targetP = extractSinglePage ? selectedPage : 1;
     setShowMarkingModal(false);
-    onPdfSelected(modalPdfPath, targetP, selectedEmailWidth, markedRegions);
+    onPdfSelected(modalPdfPath, targetP, selectedEmailWidth, markedRegions, selectedFooter);
   };
+
 
   const handleChooseHtml = async () => {
     try {

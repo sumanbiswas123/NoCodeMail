@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Screen1Welcome } from "./screens/Screen1Welcome";
 import { Screen2Process } from "./screens/Screen2Process";
 import { Screen3Editor } from "./screens/Screen3Editor";
-import { MarkedRegion } from "./services/ipc";
+import { MarkedRegion, FooterPreset } from "./services/ipc";
 import "./App.css";
 
 export function App() {
@@ -11,15 +11,23 @@ export function App() {
   const [selectedPageNum, setSelectedPageNum] = useState<number | undefined>(undefined);
   const [selectedEmailWidth, setSelectedEmailWidth] = useState<number>(700);
   const [selectedMarkedRegions, setSelectedMarkedRegions] = useState<MarkedRegion[]>([]);
+  const [selectedFooter, setSelectedFooter] = useState<FooterPreset | null>(null);
   const [editorFilePath, setEditorFilePath] = useState<string>("");
   const [editorHtml, setEditorHtml] = useState<string>("");
   const [editorFileName, setEditorFileName] = useState<string>("campaign_v2.html");
 
-  const handlePdfSelected = (path: string, pageNum?: number, emailWidth: number = 700, markedRegions: MarkedRegion[] = []) => {
+  const handlePdfSelected = (
+    path: string,
+    pageNum?: number,
+    emailWidth: number = 700,
+    markedRegions: MarkedRegion[] = [],
+    footerPreset: FooterPreset | null = null
+  ) => {
     setSelectedPdfPath(path);
     setSelectedPageNum(pageNum);
     setSelectedEmailWidth(emailWidth);
     setSelectedMarkedRegions(markedRegions);
+    setSelectedFooter(footerPreset);
     setCurrentScreen(2); // Auto transition to Screen 2
   };
 
@@ -54,10 +62,12 @@ export function App() {
           targetPage={selectedPageNum}
           emailWidth={selectedEmailWidth}
           markedRegions={selectedMarkedRegions}
+          selectedFooter={selectedFooter}
           onBackToHome={() => setCurrentScreen(1)}
           onOpenEditor={handleOpenEditor}
         />
       )}
+
 
       {currentScreen === 3 && (
         <Screen3Editor

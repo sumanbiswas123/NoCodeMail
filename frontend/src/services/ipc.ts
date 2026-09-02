@@ -47,6 +47,17 @@ export interface PDFExtractionData {
   design_json: string;
 }
 
+export interface BrowserInfo {
+  id: string;
+  name: string;
+  path: string;
+}
+
+export interface FooterPreset {
+  country: string;
+  code: string;
+}
+
 declare global {
   interface Window {
     choosePdf?: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
@@ -58,6 +69,8 @@ declare global {
     extractPdf?: (args: { path: string; email_width?: number; target_page?: number; marked_regions?: MarkedRegion[] }) => Promise<{ success: boolean; error?: string } & Partial<PDFExtractionData>>;
     compileMjml?: (args: { mjml: string; save_path?: string }) => Promise<{ success: boolean; html?: string; characters?: number; error?: string }>;
     saveFile?: (args: { path: string; content: string }) => Promise<{ success: boolean; error?: string }>;
+    getInstalledBrowsers?: () => Promise<{ success: boolean; browsers?: BrowserInfo[] }>;
+    openInBrowser?: (args: { url?: string; path?: string; browser_path?: string }) => Promise<{ success: boolean; error?: string }>;
   }
 }
 
@@ -233,6 +246,61 @@ export const nativeIPC = {
       return res.success;
     }
     return true;
+  },
+
+  async getInstalledBrowsers(): Promise<BrowserInfo[]> {
+    if (window.getInstalledBrowsers) {
+      const res = await window.getInstalledBrowsers();
+      if (res.success && res.browsers) return res.browsers;
+    }
+    return [
+      { id: "default", name: "System Default Browser", path: "" }
+    ];
+  },
+
+  async openInBrowser(options: { url?: string; path?: string; browser_path?: string }): Promise<boolean> {
+    if (window.openInBrowser) {
+      const res = await window.openInBrowser(options);
+      return res.success;
+    }
+    if (options.url) {
+      window.open(options.url, "_blank");
+      return true;
+    }
+    return false;
+  },
+
+  async fetchFooterPresets(endpointUrl = "http://10.215.56.196:9000/footer"): Promise<FooterPreset[]> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(endpointUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.footers)) {
+          // Cache in localStorage for offline resilience
+          try {
+            localStorage.setItem("nocodemail_cached_footers", JSON.stringify(data.footers));
+          } catch {}
+          return data.footers;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch remote footers, trying cache:", e);
+    }
+
+    // Fallback to local cache
+    try {
+      const cached = localStorage.getItem("nocodemail_cached_footers");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+
+    return [];
   }
 };
+
 
