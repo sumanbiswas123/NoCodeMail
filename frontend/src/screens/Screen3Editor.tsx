@@ -7,13 +7,24 @@ import {
   Undo2, 
   Redo2, 
   Code2, 
-  FileDown,
-  Check,
-  Copy,
-  X,
-  ExternalLink,
-  Globe,
-  ArrowLeft
+  FileDown, 
+  Check, 
+  Copy, 
+  X, 
+  ExternalLink, 
+  Globe, 
+  ArrowLeft,
+  Bold,
+  Italic,
+  Underline,
+  Link2,
+  Unlink,
+  Superscript as SuperIcon,
+  Subscript as SubIcon,
+  Palette,
+  Image as ImageIcon,
+  CheckSquare,
+  Square
 } from "lucide-react";
 import { StyleInspector } from "../components/StyleInspector";
 import { nativeIPC, BrowserInfo } from "../services/ipc";
@@ -155,6 +166,17 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     setIsSaved(false);
   }, [historyIndex]);
 
+  // Floating text formatting toolbar state
+  const [floatingToolbarPos, setFloatingToolbarPos] = useState<{ top: number; left: number } | null>(null);
+  const [savedRange, setSavedRange] = useState<Range | null>(null);
+  const [activeLinkNode, setActiveLinkNode] = useState<HTMLAnchorElement | null>(null);
+  const [showLinkPopover, setShowLinkPopover] = useState(false);
+  const [linkHref, setLinkHref] = useState("");
+  const [linkTargetBlank, setLinkTargetBlank] = useState(true);
+  const [showColorPopover, setShowColorPopover] = useState(false);
+  const [selectedTextColor, setSelectedTextColor] = useState("#151515");
+  const floatingToolbarRef = useRef<HTMLDivElement>(null);
+
   const selectedDomElementRef = useRef<HTMLElement | null>(null);
 
   // Extract natural styling for Style Inspector (Explicit styles + natural HTML attributes)
@@ -260,6 +282,39 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       handleSelectElement(target);
     };
 
+    // Double-click on <img> to trigger image replacement and copy to assets folder
+    const handleContainerDblClick = async (e: MouseEvent) => {
+      let target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.tagName.toLowerCase() === "img" || target.querySelector("img")) {
+        const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement);
+        if (!imgEl) return;
+
+        try {
+          const res = await nativeIPC.chooseImage();
+          if (res.success && res.path) {
+            const chosenPath = res.path;
+            const pkgDir = normalizedFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
+            const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
+
+            // If selected from outside, copy to assets directory to keep original intact
+            const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
+            let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
+            let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
+
+            imgEl.src = liveSrc;
+            imgEl.setAttribute("src", liveSrc);
+
+            setIsSaved(false);
+            isInternalUpdateRef.current = true;
+            pushHistory(exportPristineHtml());
+          }
+        } catch (err) {
+          console.error("Image replace error:", err);
+        }
+      }
+    };
+
     const handleContainerInput = () => {
       setIsSaved(false);
     };
@@ -268,18 +323,78 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       e.preventDefault();
     };
 
+    // Track text selection inside editable email canvas
+    const handleDocumentSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+        // If clicking inside floating popover, don't dismiss
+        if (floatingToolbarRef.current && floatingToolbarRef.current.contains(document.activeElement)) {
+          return;
+        }
+        setFloatingToolbarPos(null);
+        setShowLinkPopover(false);
+        setShowColorPopover(false);
+        setActiveLinkNode(null);
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const commonAncestor = range.commonAncestorContainer;
+      const anchorNode = commonAncestor.nodeType === Node.TEXT_NODE ? commonAncestor.parentElement : (commonAncestor as HTMLElement);
+
+      // Verify selection is within email container
+      if (!anchorNode || !container.contains(anchorNode)) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      // Check if selected range is inside an <a> tag
+      let currentLink: HTMLAnchorElement | null = null;
+      let checkNode: HTMLElement | null = anchorNode;
+      while (checkNode && checkNode !== container) {
+        if (checkNode.tagName.toLowerCase() === "a") {
+          currentLink = checkNode as HTMLAnchorElement;
+          break;
+        }
+        checkNode = checkNode.parentElement;
+      }
+
+      setActiveLinkNode(currentLink);
+      if (currentLink) {
+        setLinkHref(currentLink.getAttribute("href") || "");
+        setLinkTargetBlank(currentLink.getAttribute("target") === "_blank");
+      }
+
+      setSavedRange(range.cloneRange());
+
+      // Position toolbar 10px directly above selected text
+      const topPos = Math.max(10, rect.top - 52);
+      const leftPos = Math.max(10, Math.min(window.innerWidth - 360, rect.left + rect.width / 2 - 170));
+      setFloatingToolbarPos({ top: topPos, left: leftPos });
+    };
+
     container.addEventListener("pointerdown", handleContainerPointerDown, true);
     container.addEventListener("click", handleContainerPointerDown, true);
+    container.addEventListener("dblclick", handleContainerDblClick, true);
     container.addEventListener("dragstart", handleDragStart);
     container.addEventListener("input", handleContainerInput);
+    document.addEventListener("selectionchange", handleDocumentSelectionChange);
 
     return () => {
       container.removeEventListener("pointerdown", handleContainerPointerDown, true);
       container.removeEventListener("click", handleContainerPointerDown, true);
+      container.removeEventListener("dblclick", handleContainerDblClick, true);
       container.removeEventListener("dragstart", handleDragStart);
       container.removeEventListener("input", handleContainerInput);
+      document.removeEventListener("selectionchange", handleDocumentSelectionChange);
     };
-  }, [handleSelectElement]);
+  }, [handleSelectElement, normalizedFolder, pkgPrefix, exportPristineHtml, pushHistory]);
 
   // 2. Mount document into direct DOM container on load or Undo/Redo
   useEffect(() => {
@@ -500,6 +615,99 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
     }
+  };
+
+  // Restore selection range when user clicks toolbar buttons
+  const restoreRange = useCallback(() => {
+    if (savedRange) {
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+      }
+    }
+  }, [savedRange]);
+
+  // Execute standard text formatting commands and pipe cleanly into undo/redo history
+  const handleFormatText = (command: "bold" | "italic" | "underline" | "superscript" | "subscript") => {
+    restoreRange();
+    document.execCommand(command, false);
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  };
+
+  // Apply text color and pipe into history
+  const handleApplyTextColor = (color: string) => {
+    setSelectedTextColor(color);
+    restoreRange();
+    document.execCommand("foreColor", false, color);
+    setShowColorPopover(false);
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  };
+
+  // Apply or update link with href and target, pipe into history
+  const handleApplyLink = () => {
+    restoreRange();
+    let url = linkHref.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url) && !url.startsWith("mailto:") && !url.startsWith("#")) {
+      url = `https://${url}`;
+    }
+
+    if (activeLinkNode) {
+      activeLinkNode.setAttribute("href", url);
+      if (linkTargetBlank) {
+        activeLinkNode.setAttribute("target", "_blank");
+        activeLinkNode.setAttribute("rel", "noopener noreferrer");
+      } else {
+        activeLinkNode.removeAttribute("target");
+        activeLinkNode.removeAttribute("rel");
+      }
+    } else {
+      document.execCommand("createLink", false, url);
+      const selection = window.getSelection();
+      if (selection && selection.anchorNode) {
+        let parentEl = selection.anchorNode.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : (selection.anchorNode as HTMLElement);
+        while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== emailContainerRef.current) {
+          parentEl = parentEl.parentElement;
+        }
+        if (parentEl && parentEl.tagName.toLowerCase() === "a") {
+          if (linkTargetBlank) {
+            parentEl.setAttribute("target", "_blank");
+            parentEl.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+      }
+    }
+
+    setShowLinkPopover(false);
+    setFloatingToolbarPos(null);
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  };
+
+  // Remove link and pipe into history
+  const handleRemoveLink = () => {
+    restoreRange();
+    if (activeLinkNode) {
+      const parent = activeLinkNode.parentNode;
+      while (activeLinkNode.firstChild) {
+        parent?.insertBefore(activeLinkNode.firstChild, activeLinkNode);
+      }
+      parent?.removeChild(activeLinkNode);
+    } else {
+      document.execCommand("unlink", false);
+    }
+    setActiveLinkNode(null);
+    setShowLinkPopover(false);
+    setFloatingToolbarPos(null);
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
   };
 
   const handleUndo = () => {
@@ -1110,13 +1318,13 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             <span>Code</span>
           </button>
 
-          {/* Export HTML Primary Button */}
+          {/* Export HTML Primary Button (Hidden per user request) */}
           <button
             type="button"
             onClick={handleSave}
             title="Export Clean HTML"
             style={{
-              display: "flex",
+              display: "none",
               alignItems: "center",
               gap: "5px",
               padding: "5px 12px",
@@ -1237,6 +1445,363 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             />
           </div>
         </div>
+
+        {/* Floating Contextual Formatting Toolbar */}
+        {floatingToolbarPos && (
+          <div
+            ref={floatingToolbarRef}
+            className="editor-floating-toolbar"
+            style={{
+              position: "fixed",
+              top: `${floatingToolbarPos.top}px`,
+              left: `${floatingToolbarPos.left}px`,
+              background: "#1e293b",
+              borderRadius: "8px",
+              boxShadow: "0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.15)",
+              display: "flex",
+              alignItems: "center",
+              gap: "2px",
+              padding: "4px 6px",
+              zIndex: 9999,
+              userSelect: "none",
+              animation: "fadeIn 0.12s ease-out",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* 1. Link Button (Highlighted First if active link) */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowColorPopover(false);
+                setShowLinkPopover(!showLinkPopover);
+              }}
+              title={activeLinkNode ? "Edit Hyperlink (Active Link)" : "Insert Hyperlink"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "5px 8px",
+                borderRadius: "5px",
+                border: "none",
+                background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
+                color: "#ffffff",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "600",
+                transition: "all 0.1s ease",
+              }}
+            >
+              <Link2 size={13} color="#ffffff" />
+              {activeLinkNode && <span>Edit Link</span>}
+            </button>
+
+            {/* Unlink button if active link */}
+            {activeLinkNode && (
+              <button
+                type="button"
+                onClick={handleRemoveLink}
+                title="Remove Link (Unlink)"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "5px 7px",
+                  borderRadius: "5px",
+                  border: "none",
+                  background: "transparent",
+                  color: "#ef4444",
+                  cursor: "pointer",
+                }}
+              >
+                <Unlink size={13} />
+              </button>
+            )}
+
+            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+            {/* 2. Superscript (<sup>) */}
+            <button
+              type="button"
+              onClick={() => handleFormatText("superscript")}
+              title="Superscript (e.g. 1,2 or TM)"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+                padding: "5px 7px",
+                borderRadius: "5px",
+                border: "none",
+                background: "transparent",
+                color: "#f8fafc",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "700",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <SuperIcon size={14} />
+              <span style={{ fontSize: "11px" }}>x²</span>
+            </button>
+
+            {/* 3. Subscript (<sub>) */}
+            <button
+              type="button"
+              onClick={() => handleFormatText("subscript")}
+              title="Subscript (e.g. H2O)"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+                padding: "5px 7px",
+                borderRadius: "5px",
+                border: "none",
+                background: "transparent",
+                color: "#f8fafc",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "700",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <SubIcon size={14} />
+              <span style={{ fontSize: "11px" }}>x₂</span>
+            </button>
+
+            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+            {/* 4. Bold */}
+            <button
+              type="button"
+              onClick={() => handleFormatText("bold")}
+              title="Bold (Ctrl+B)"
+              style={{
+                padding: "5px 7px",
+                borderRadius: "5px",
+                border: "none",
+                background: "transparent",
+                color: "#f8fafc",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Bold size={13} />
+            </button>
+
+            {/* 5. Italic */}
+            <button
+              type="button"
+              onClick={() => handleFormatText("italic")}
+              title="Italic (Ctrl+I)"
+              style={{
+                padding: "5px 7px",
+                borderRadius: "5px",
+                border: "none",
+                background: "transparent",
+                color: "#f8fafc",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Italic size={13} />
+            </button>
+
+            {/* 6. Underline */}
+            <button
+              type="button"
+              onClick={() => handleFormatText("underline")}
+              title="Underline (Ctrl+U)"
+              style={{
+                padding: "5px 7px",
+                borderRadius: "5px",
+                border: "none",
+                background: "transparent",
+                color: "#f8fafc",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Underline size={13} />
+            </button>
+
+            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+            {/* 7. Color Picker */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLinkPopover(false);
+                  setShowColorPopover(!showColorPopover);
+                }}
+                title="Change Text Color"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "5px 7px",
+                  borderRadius: "5px",
+                  border: "none",
+                  background: showColorPopover ? "#334155" : "transparent",
+                  color: "#f8fafc",
+                  cursor: "pointer",
+                }}
+              >
+                <Palette size={13} />
+                <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: selectedTextColor, border: "1px solid #ffffff" }} />
+              </button>
+
+              {/* Color Swatch Popover */}
+              {showColorPopover && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    marginTop: "8px",
+                    background: "#ffffff",
+                    borderRadius: "8px",
+                    padding: "8px",
+                    boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+                    border: "1px solid #e2e8f0",
+                    display: "grid",
+                    gridTemplateColumns: "repeat(5, 20px)",
+                    gap: "6px",
+                    zIndex: 10000,
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {[
+                    "#000000", "#151515", "#475569", "#94a3b8", "#ffffff",
+                    "#ef4444", "#f97316", "#eab308", "#16a34a", "#2563eb",
+                    "#4f46e5", "#7c3aed", "#9333ea", "#db2777", "#9e0b0f"
+                  ].map((c) => (
+                    <div
+                      key={c}
+                      onClick={() => handleApplyTextColor(c)}
+                      style={{
+                        width: "20px",
+                        height: "20px",
+                        borderRadius: "4px",
+                        background: c,
+                        border: c === "#ffffff" ? "1px solid #cbd5e1" : "1px solid rgba(0,0,0,0.1)",
+                        cursor: "pointer",
+                        transition: "transform 0.1s ease",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.2)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
+                      title={c}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Link Edit Popover */}
+            {showLinkPopover && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: "0",
+                  marginTop: "8px",
+                  background: "#ffffff",
+                  borderRadius: "8px",
+                  padding: "10px 12px",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                  border: "1px solid #e2e8f0",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  minWidth: "280px",
+                  zIndex: 10000,
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Globe size={13} color="#64748b" />
+                  <span style={{ fontSize: "11px", fontWeight: "700", color: "#334155" }}>
+                    {activeLinkNode ? "Edit Destination URL" : "Set Destination URL"}
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={linkHref}
+                  onChange={(e) => setLinkHref(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleApplyLink()}
+                  placeholder="https://example.com"
+                  autoFocus
+                  style={{
+                    padding: "6px 8px",
+                    borderRadius: "5px",
+                    border: "1px solid #cbd5e1",
+                    fontSize: "12px",
+                    color: "#0f172a",
+                    outline: "none",
+                    width: "100%",
+                  }}
+                />
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "11px",
+                    color: "#475569",
+                    cursor: "pointer",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={linkTargetBlank}
+                    onChange={(e) => setLinkTargetBlank(e.target.checked)}
+                    style={{ accentColor: "#4f46e5", cursor: "pointer" }}
+                  />
+                  <span>Open link in new tab (<code>target="_blank"</code>)</span>
+                </label>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px", marginTop: "2px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowLinkPopover(false)}
+                    style={{
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      border: "1px solid #e2e8f0",
+                      background: "#f8fafc",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      color: "#64748b",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyLink}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: "4px",
+                      border: "none",
+                      background: "#4f46e5",
+                      color: "#ffffff",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Apply Link
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Right Sidebar: Chrome DevTools Style Inspector */}
         <aside className="editor-sidebar-inspector">

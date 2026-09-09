@@ -70,12 +70,20 @@ declare global {
     compileMjml?: (args: { mjml: string; save_path?: string }) => Promise<{ success: boolean; html?: string; characters?: number; error?: string }>;
     saveFile?: (args: { path: string; content: string }) => Promise<{ success: boolean; error?: string }>;
     readFile?: (args: { path: string }) => Promise<{ success: boolean; content?: string; error?: string }>;
+    copyAsset?: (args: { source_path: string; target_dir: string }) => Promise<{ success: boolean; new_relative_path?: string; new_filename?: string; new_full_path?: string; error?: string }>;
     getInstalledBrowsers?: () => Promise<{ success: boolean; browsers?: BrowserInfo[] }>;
     openInBrowser?: (args: { url?: string; path?: string; browser_path?: string }) => Promise<{ success: boolean; error?: string }>;
   }
 }
 
 export const nativeIPC = {
+  async copyAsset(sourcePath: string, targetDir: string): Promise<{ success: boolean; new_relative_path?: string; new_filename?: string; new_full_path?: string; error?: string }> {
+    if (window.copyAsset) {
+      return await window.copyAsset({ source_path: sourcePath, target_dir: targetDir });
+    }
+    const fname = sourcePath.split(/[/\\]/).pop() || "image.png";
+    return { success: true, new_relative_path: `assets/${fname}`, new_filename: fname, new_full_path: `${targetDir}\\${fname}` };
+  },
   async chooseImage(): Promise<{ success: boolean; path?: string }> {
     if (window.chooseImage) {
       return await window.chooseImage();

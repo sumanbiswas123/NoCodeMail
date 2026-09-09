@@ -92,6 +92,7 @@ const win32_base = struct {
     extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?*anyopaque;
     extern "kernel32" fn SetEnvironmentVariableW(lpName: [*:0]const u16, lpValue: ?[*:0]const u16) callconv(.winapi) c_int;
     extern "kernel32" fn GetEnvironmentVariableW(lpName: [*:0]const u16, lpBuffer: ?[*]u16, nSize: u32) callconv(.winapi) u32;
+    extern "kernel32" fn CreateDirectoryA(lpPathName: [*:0]const u8, lpSecurityAttributes: ?*anyopaque) callconv(.winapi) c_int;
 };
 
 const win32_shell = struct {
@@ -854,6 +855,106 @@ pub const App = struct {
         self.w.respond(seq, .ok, res_json) catch {};
     }
 
+    pub fn handleCopyAsset(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const CopyParam = struct {
+            source_path: []const u8,
+            target_dir: []const u8,
+        };
+
+        var src_path: []const u8 = "";
+        var tgt_dir: []const u8 = "";
+
+        if (std.json.parseFromSlice([]CopyParam, alloc, req, .{})) |parsed_arr| {
+            if (parsed_arr.value.len > 0) {
+                src_path = parsed_arr.value[0].source_path;
+                tgt_dir = parsed_arr.value[0].target_dir;
+            }
+        } else |_| {
+            if (std.json.parseFromSlice(CopyParam, alloc, req, .{})) |parsed_obj| {
+                src_path = parsed_obj.value.source_path;
+                tgt_dir = parsed_obj.value.target_dir;
+            } else |_| {
+                self.w.respond(seq, .err, "{\"error\":\"Invalid arguments\"}") catch {};
+                return;
+            }
+        }
+
+        if (src_path.len == 0 or tgt_dir.len == 0) {
+            self.w.respond(seq, .err, "{\"error\":\"Missing source_path or target_dir\"}") catch {};
+            return;
+        }
+
+        // Read source file bytes
+        const src_z = alloc.dupeZ(u8, src_path) catch return;
+        const file_bytes = readFileAlloc(alloc, src_z) orelse {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to read source image\"}") catch {};
+            return;
+        };
+
+        // Extract base filename from source path
+        var base_name: []const u8 = src_path;
+        if (std.mem.lastIndexOfAny(u8, src_path, "/\\")) |idx| {
+            base_name = src_path[idx + 1 ..];
+        }
+        if (base_name.len == 0) base_name = "image.png";
+
+        // Separate stem and extension
+        var stem: []const u8 = base_name;
+        var ext: []const u8 = "";
+        if (std.mem.lastIndexOfScalar(u8, base_name, '.')) |dot_idx| {
+            stem = base_name[0..dot_idx];
+            ext = base_name[dot_idx..];
+        }
+
+        // Ensure target directory exists (Win32 CreateDirectoryA)
+        const tgt_dir_z = alloc.dupeZ(u8, tgt_dir) catch return;
+        _ = win32_base.CreateDirectoryA(tgt_dir_z.ptr, null);
+
+        // Find non-conflicting unique filename in target_dir to keep existing intact
+        var candidate_name = alloc.dupe(u8, base_name) catch return;
+        var candidate_full = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ tgt_dir, candidate_name }) catch return;
+        var counter: u32 = 1;
+
+        while (true) {
+            const cand_z = alloc.dupeZ(u8, candidate_full) catch return;
+            const existing = fopen(cand_z.ptr, "rb");
+            if (existing) |eh| {
+                _ = fclose(eh);
+                // Exists, generate next name: name_1.png, name_2.png
+                candidate_name = std.fmt.allocPrint(alloc, "{s}_{d}{s}", .{ stem, counter, ext }) catch return;
+                candidate_full = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ tgt_dir, candidate_name }) catch return;
+                counter += 1;
+            } else {
+                // Available filename found
+                break;
+            }
+        }
+
+        // Write to target location
+        const final_cand_z = alloc.dupeZ(u8, candidate_full) catch return;
+        const out_file = fopen(final_cand_z.ptr, "wb");
+        if (out_file) |of| {
+            _ = fwrite(file_bytes.ptr, 1, file_bytes.len, of);
+            _ = fclose(of);
+
+            const rel_path = std.fmt.allocPrint(alloc, "assets/{s}", .{candidate_name}) catch candidate_name;
+
+            const res_json = std.fmt.allocPrintSentinel(
+                alloc,
+                "{{\"success\":true,\"new_relative_path\":{f},\"new_filename\":{f},\"new_full_path\":{f}}}",
+                .{ std.json.fmt(rel_path, .{}), std.json.fmt(candidate_name, .{}), std.json.fmt(candidate_full, .{}) },
+                0
+            ) catch return;
+            self.w.respond(seq, .ok, res_json) catch {};
+        } else {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to write copied image to assets directory\"}") catch {};
+        }
+    }
+
     pub fn handleGetInstalledBrowsers(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
         _ = req;
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -950,6 +1051,104 @@ pub const App = struct {
                             }) catch {};
                         }
                     }
+                }
+            }
+        }
+
+        // Check if OneView is installed on the user's system
+        {
+            var oneview_path: ?[]const u8 = null;
+
+            // 1. Try reading command from registry HKCU\Software\Classes\OneView.Assoc\shell\open\command
+            const ov_reg_key_w = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Classes\\OneView.Assoc\\shell\\open\\command");
+            var h_ov_key: usize = 0;
+            if (win32_shell.RegOpenKeyExW(0x80000001, ov_reg_key_w, 0, 0x20019, &h_ov_key) == 0) {
+                defer _ = win32_shell.RegCloseKey(h_ov_key);
+                var cmd_data: [1024]u8 = undefined;
+                var cmd_size: u32 = cmd_data.len;
+                if (win32_shell.RegQueryValueExW(h_ov_key, null, null, null, &cmd_data, &cmd_size) == 0 and cmd_size > 0) {
+                    const w_cmd = @as([*]const u16, @ptrCast(@alignCast(&cmd_data)))[0 .. (cmd_size / 2)];
+                    const clean_cmd = std.mem.sliceTo(w_cmd, 0);
+                    var cmd_u8: [1024]u8 = undefined;
+                    if (std.unicode.utf16LeToUtf8(&cmd_u8, clean_cmd)) |c_len| {
+                        var raw_cmd = cmd_u8[0..c_len];
+                        if (std.mem.startsWith(u8, raw_cmd, "\"")) {
+                            if (std.mem.indexOf(u8, raw_cmd[1..], "\"")) |q_end| {
+                                raw_cmd = raw_cmd[1 .. 1 + q_end];
+                            }
+                        } else if (std.mem.indexOf(u8, raw_cmd, ".exe")) |exe_idx| {
+                            raw_cmd = raw_cmd[0 .. exe_idx + 4];
+                        }
+                        if (openFileUtf8(raw_cmd, "rb")) |f| {
+                            _ = fclose(f);
+                            oneview_path = alloc.dupe(u8, raw_cmd) catch null;
+                        }
+                    } else |_| {}
+                }
+            }
+
+            // 2. Fallback: Check %LOCALAPPDATA%\OneView\oneview.exe
+            if (oneview_path == null) {
+                var localapp_w: [1024]u16 = undefined;
+                const env_name_w = std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA");
+                const len = win32_base.GetEnvironmentVariableW(env_name_w, &localapp_w, localapp_w.len);
+                if (len > 0 and len < localapp_w.len) {
+                    var localapp_u8: [1024]u8 = undefined;
+                    if (std.unicode.utf16LeToUtf8(&localapp_u8, localapp_w[0..len])) |la_len| {
+                        const candidate = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{localapp_u8[0..la_len]}) catch null;
+                        if (candidate) |cand| {
+                            if (openFileUtf8(cand, "rb")) |f| {
+                                _ = fclose(f);
+                                oneview_path = cand;
+                            }
+                        }
+                    } else |_| {}
+                }
+            }
+
+            // 3. Fallback: Check %APPDATA%\OneView\oneview.exe or %APPDATA%\oneview.exe
+            if (oneview_path == null) {
+                var appdata_w: [1024]u16 = undefined;
+                const env_app_w = std.unicode.utf8ToUtf16LeStringLiteral("APPDATA");
+                const len = win32_base.GetEnvironmentVariableW(env_app_w, &appdata_w, appdata_w.len);
+                if (len > 0 and len < appdata_w.len) {
+                    var appdata_u8: [1024]u8 = undefined;
+                    if (std.unicode.utf16LeToUtf8(&appdata_u8, appdata_w[0..len])) |ad_len| {
+                        const candidate1 = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
+                        if (candidate1) |cand1| {
+                            if (openFileUtf8(cand1, "rb")) |f| {
+                                _ = fclose(f);
+                                oneview_path = cand1;
+                            }
+                        }
+                        if (oneview_path == null) {
+                            const candidate2 = std.fmt.allocPrint(alloc, "{s}\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
+                            if (candidate2) |cand2| {
+                                if (openFileUtf8(cand2, "rb")) |f| {
+                                _ = fclose(f);
+                                oneview_path = cand2;
+                            }
+                        }
+                    }
+                    } else |_| {}
+                }
+            }
+
+            // If found and not already in list, add to browser list
+            if (oneview_path) |path| {
+                var exists = false;
+                for (browser_list.items) |b| {
+                    if (std.ascii.indexOfIgnoreCase(b.name, "oneview") != null or std.ascii.indexOfIgnoreCase(b.path, "oneview.exe") != null) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    browser_list.append(alloc, .{
+                        .id = "oneview",
+                        .name = "OneView",
+                        .path = path,
+                    }) catch {};
                 }
             }
         }
@@ -1184,6 +1383,7 @@ pub fn main() !void {
     try w.bind(App, "extractPdf", App.handleExtractPdf, &app);
     try w.bind(App, "saveFile", App.handleSaveFile, &app);
     try w.bind(App, "readFile", App.handleReadFile, &app);
+    try w.bind(App, "copyAsset", App.handleCopyAsset, &app);
     try w.bind(App, "getInstalledBrowsers", App.handleGetInstalledBrowsers, &app);
     try w.bind(App, "openInBrowser", App.handleOpenInBrowser, &app);
 

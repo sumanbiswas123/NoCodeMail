@@ -232,7 +232,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   onSelectElement,
   domRoot,
 }) => {
-  const [showDomTree, setShowDomTree] = useState(false);
+  const [showDomTree, setShowDomTree] = useState(true);
   const [filterText, setFilterText] = useState("");
   const [newProp, setNewProp] = useState("");
   const [newVal, setNewVal] = useState("");
