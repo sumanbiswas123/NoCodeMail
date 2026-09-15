@@ -133,6 +133,7 @@ body {
 /* Email Canvas Selection & Live Focus Styles */
 .email-direct-dom-root {
   position: relative;
+  user-select: text;
 }
 
 .email-direct-dom-root *:hover {

@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
 
 interface DomTreeViewerProps {
@@ -24,12 +24,12 @@ const DomTreeNode: React.FC<DomTreeNodeProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
 
-  if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+  if (!element || element.nodeType !== 1) return null;
   const tagName = element.tagName.toLowerCase();
   if (IGNORED_TAGS.includes(tagName)) return null;
 
-  const childElements = Array.from(element.children).filter(
-    (child) => child.nodeType === Node.ELEMENT_NODE && !IGNORED_TAGS.includes(child.tagName.toLowerCase())
+  const childElements = Array.from(element.children || []).filter(
+    (child) => child && child.nodeType === 1 && !IGNORED_TAGS.includes(child.tagName?.toLowerCase())
   ) as HTMLElement[];
 
   const hasChildren = childElements.length > 0;

@@ -143,7 +143,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const [inlineStyles, setInlineStyles] = useState<Record<string, string>>({});
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
-  const emailContainerRef = useRef<HTMLDivElement>(null);
+  const emailIframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeDomRoot, setIframeDomRoot] = useState<HTMLElement | null>(null);
   const isInternalUpdateRef = useRef<boolean>(false);
   const hasInitSelectionRef = useRef<boolean>(false);
 
@@ -208,11 +209,12 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   // Handler for selecting an element in the email canvas
   const handleSelectElement = useCallback((target: HTMLElement) => {
     if (!target) return;
-    if (target === emailContainerRef.current) return;
+    const doc = emailIframeRef.current?.contentDocument;
+    if (doc && (target === doc.body || target === doc.documentElement)) return;
 
     // Deselect previous node
-    if (emailContainerRef.current) {
-      emailContainerRef.current.querySelectorAll(".editor-active-selected").forEach((node) => {
+    if (doc) {
+      doc.querySelectorAll(".editor-active-selected").forEach((node) => {
         (node as HTMLElement).classList.remove("editor-active-selected");
       });
     }
@@ -226,17 +228,23 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     setInlineStyles(styles);
   }, []);
 
-  // Export clean HTML (strips editor attributes)
+  // Export clean HTML (strips editor attributes and preserves original document envelope 1:1)
   const exportPristineHtml = useCallback((): string => {
-    const container = emailContainerRef.current;
-    if (!container) {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc) {
       return history[historyIndex] || startHtml;
     }
 
     // Deep clone the document root in memory
-    const clone = container.cloneNode(true) as HTMLElement;
+    const clone = doc.documentElement.cloneNode(true) as HTMLElement;
 
-    // Remove all editor attributes
+    // Remove any editor injected styles or indicators
+    clone.querySelectorAll("[data-email-injected-style]").forEach((el) => {
+      el.remove();
+    });
+
+    // Remove all editor interactive attributes
     clone.querySelectorAll("[contenteditable]").forEach((el) => {
       el.removeAttribute("contenteditable");
       el.removeAttribute("spellcheck");
@@ -245,7 +253,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       el.classList.remove("editor-active-selected");
     });
 
-    let cleanHtml = clone.innerHTML;
+    let cleanHtml = clone.outerHTML;
     if (pkgPrefix) {
       const escapedPrefix = pkgPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix + "assets/", "g"), "assets/");
@@ -254,9 +262,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\/assets\//g, "assets/");
     cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\//g, "");
 
-    // Wrap in standard doctype if needed
     if (!cleanHtml.toLowerCase().includes("<!doctype html>")) {
-      cleanHtml = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n</head>\n<body style="margin:0;padding:0;">\n${cleanHtml}\n</body>\n</html>`;
+      cleanHtml = `<!DOCTYPE html>\n${cleanHtml}`;
     }
 
     return cleanHtml;
@@ -264,135 +271,130 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
   // 1. Persistent event listeners on canvas container (registered once)
   useEffect(() => {
-    const container = emailContainerRef.current;
-    if (!container) return;
+    const iframe = emailIframeRef.current;
+    if (!iframe) return;
 
-    const handleContainerPointerDown = (e: MouseEvent) => {
-      let target = e.target as HTMLElement | null;
-      if (!target || target === container) {
-        if (selectedDomElementRef.current) {
-          selectedDomElementRef.current.classList.remove("editor-active-selected");
-        }
-        selectedDomElementRef.current = null;
-        setSelectedDomElement(null);
-        setInlineStyles({});
-        return;
-      }
+    const attachIframeListeners = () => {
+      const doc = iframe.contentDocument;
+      if (!doc || !doc.body) return;
 
-      handleSelectElement(target);
-    };
-
-    // Double-click on <img> to trigger image replacement and copy to assets folder
-    const handleContainerDblClick = async (e: MouseEvent) => {
-      let target = e.target as HTMLElement | null;
-      if (!target) return;
-      if (target.tagName.toLowerCase() === "img" || target.querySelector("img")) {
-        const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement);
-        if (!imgEl) return;
-
-        try {
-          const res = await nativeIPC.chooseImage();
-          if (res.success && res.path) {
-            const chosenPath = res.path;
-            const pkgDir = normalizedFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
-            const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
-
-            // If selected from outside, copy to assets directory to keep original intact
-            const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
-            let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
-            let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
-
-            imgEl.src = liveSrc;
-            imgEl.setAttribute("src", liveSrc);
-
-            setIsSaved(false);
-            isInternalUpdateRef.current = true;
-            pushHistory(exportPristineHtml());
+      const handleDocPointerDown = (e: MouseEvent) => {
+        let target = e.target as HTMLElement | null;
+        if (!target || target === doc.body || target === doc.documentElement) {
+          if (selectedDomElementRef.current) {
+            selectedDomElementRef.current.classList.remove("editor-active-selected");
           }
-        } catch (err) {
-          console.error("Image replace error:", err);
-        }
-      }
-    };
-
-    const handleContainerInput = () => {
-      setIsSaved(false);
-    };
-
-    const handleDragStart = (e: DragEvent) => {
-      e.preventDefault();
-    };
-
-    // Track text selection inside editable email canvas
-    const handleDocumentSelectionChange = () => {
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-        // If clicking inside floating popover, don't dismiss
-        if (floatingToolbarRef.current && floatingToolbarRef.current.contains(document.activeElement)) {
+          selectedDomElementRef.current = null;
+          setSelectedDomElement(null);
+          setInlineStyles({});
           return;
         }
-        setFloatingToolbarPos(null);
-        setShowLinkPopover(false);
-        setShowColorPopover(false);
-        setActiveLinkNode(null);
-        return;
-      }
 
-      const range = selection.getRangeAt(0);
-      const commonAncestor = range.commonAncestorContainer;
-      const anchorNode = commonAncestor.nodeType === Node.TEXT_NODE ? commonAncestor.parentElement : (commonAncestor as HTMLElement);
+        handleSelectElement(target);
+      };
 
-      // Verify selection is within email container
-      if (!anchorNode || !container.contains(anchorNode)) {
-        setFloatingToolbarPos(null);
-        return;
-      }
+      const handleDocDblClick = async (e: MouseEvent) => {
+        let target = e.target as HTMLElement | null;
+        if (!target) return;
+        if (target.tagName.toLowerCase() === "img" || target.querySelector("img")) {
+          const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement);
+          if (!imgEl) return;
 
-      const rect = range.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) {
-        setFloatingToolbarPos(null);
-        return;
-      }
+          try {
+            const res = await nativeIPC.chooseImage();
+            if (res.success && res.path) {
+              const chosenPath = res.path;
+              const pkgDir = normalizedFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
+              const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
 
-      // Check if selected range is inside an <a> tag
-      let currentLink: HTMLAnchorElement | null = null;
-      let checkNode: HTMLElement | null = anchorNode;
-      while (checkNode && checkNode !== container) {
-        if (checkNode.tagName.toLowerCase() === "a") {
-          currentLink = checkNode as HTMLAnchorElement;
-          break;
+              const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
+              let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
+              let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
+
+              imgEl.src = liveSrc;
+              imgEl.setAttribute("src", liveSrc);
+
+              setIsSaved(false);
+              isInternalUpdateRef.current = true;
+              pushHistory(exportPristineHtml());
+            }
+          } catch (err) {
+            console.error("Image replace error:", err);
+          }
         }
-        checkNode = checkNode.parentElement;
-      }
+      };
 
-      setActiveLinkNode(currentLink);
-      if (currentLink) {
-        setLinkHref(currentLink.getAttribute("href") || "");
-        setLinkTargetBlank(currentLink.getAttribute("target") === "_blank");
-      }
+      const handleDocInput = () => {
+        setIsSaved(false);
+      };
 
-      setSavedRange(range.cloneRange());
+      const handleDocSelectionChange = () => {
+        const win = iframe.contentWindow;
+        if (!win) return;
+        const selection = win.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+          if (floatingToolbarRef.current && floatingToolbarRef.current.contains(document.activeElement)) {
+            return;
+          }
+          setFloatingToolbarPos(null);
+          setShowLinkPopover(false);
+          setShowColorPopover(false);
+          setActiveLinkNode(null);
+          return;
+        }
 
-      // Position toolbar 10px directly above selected text
-      const topPos = Math.max(10, rect.top - 52);
-      const leftPos = Math.max(10, Math.min(window.innerWidth - 360, rect.left + rect.width / 2 - 170));
-      setFloatingToolbarPos({ top: topPos, left: leftPos });
+        const range = selection.getRangeAt(0);
+        const commonAncestor = range.commonAncestorContainer;
+        const anchorNode = commonAncestor.nodeType === Node.TEXT_NODE ? commonAncestor.parentElement : (commonAncestor as HTMLElement);
+
+        if (!anchorNode || !doc.body.contains(anchorNode)) {
+          setFloatingToolbarPos(null);
+          return;
+        }
+
+        const rect = range.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) {
+          setFloatingToolbarPos(null);
+          return;
+        }
+
+        let currentLink: HTMLAnchorElement | null = null;
+        let checkNode: HTMLElement | null = anchorNode;
+        while (checkNode && checkNode !== doc.body) {
+          if (checkNode.tagName.toLowerCase() === "a") {
+            currentLink = checkNode as HTMLAnchorElement;
+            break;
+          }
+          checkNode = checkNode.parentElement;
+        }
+
+        setActiveLinkNode(currentLink);
+        if (currentLink) {
+          setLinkHref(currentLink.getAttribute("href") || "");
+          setLinkTargetBlank(currentLink.getAttribute("target") === "_blank");
+        }
+
+        setSavedRange(range.cloneRange());
+
+        // Translate coordinates from iframe interior to parent window
+        const iframeRect = iframe.getBoundingClientRect();
+        const topPos = Math.max(10, iframeRect.top + rect.top - 52);
+        const leftPos = Math.max(10, Math.min(window.innerWidth - 360, iframeRect.left + rect.left + rect.width / 2 - 170));
+        setFloatingToolbarPos({ top: topPos, left: leftPos });
+      };
+
+      doc.addEventListener("pointerdown", handleDocPointerDown, true);
+      doc.addEventListener("click", handleDocPointerDown, true);
+      doc.addEventListener("dblclick", handleDocDblClick, true);
+      doc.addEventListener("input", handleDocInput);
+      doc.addEventListener("selectionchange", handleDocSelectionChange);
     };
 
-    container.addEventListener("pointerdown", handleContainerPointerDown, true);
-    container.addEventListener("click", handleContainerPointerDown, true);
-    container.addEventListener("dblclick", handleContainerDblClick, true);
-    container.addEventListener("dragstart", handleDragStart);
-    container.addEventListener("input", handleContainerInput);
-    document.addEventListener("selectionchange", handleDocumentSelectionChange);
+    attachIframeListeners();
+    iframe.addEventListener("load", attachIframeListeners);
 
     return () => {
-      container.removeEventListener("pointerdown", handleContainerPointerDown, true);
-      container.removeEventListener("click", handleContainerPointerDown, true);
-      container.removeEventListener("dblclick", handleContainerDblClick, true);
-      container.removeEventListener("dragstart", handleDragStart);
-      container.removeEventListener("input", handleContainerInput);
-      document.removeEventListener("selectionchange", handleDocumentSelectionChange);
+      iframe.removeEventListener("load", attachIframeListeners);
     };
   }, [handleSelectElement, normalizedFolder, pkgPrefix, exportPristineHtml, pushHistory]);
 
@@ -403,8 +405,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       return;
     }
 
-    const container = emailContainerRef.current;
-    if (!container) return;
+    const iframe = emailIframeRef.current;
+    if (!iframe) return;
+    const doc = iframe.contentDocument;
+    if (!doc) return;
 
     // Track previously selected element path before innerHTML replacement
     const getDomPath = (el: HTMLElement, root: HTMLElement): number[] => {
@@ -430,8 +434,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     };
 
     let selectedPath: number[] | null = null;
-    if (selectedDomElementRef.current && container.contains(selectedDomElementRef.current)) {
-      selectedPath = getDomPath(selectedDomElementRef.current, container);
+    if (selectedDomElementRef.current && doc.body && doc.body.contains(selectedDomElementRef.current)) {
+      selectedPath = getDomPath(selectedDomElementRef.current, doc.body);
     }
 
     const currentHtml = history[historyIndex] || startHtml;
@@ -456,20 +460,64 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
     });
 
-    let bodyContent = preparedHtml;
-    const bodyMatch = /<body[^>]*>([\s\S]*)<\/body>/i.exec(preparedHtml);
-    if (bodyMatch) {
-      bodyContent = bodyMatch[1];
-    }
+    // Write pristine HTML into iframe
+    doc.open();
+    doc.write(preparedHtml);
+    doc.close();
 
-    container.innerHTML = bodyContent;
+    // Inject editor outline & hover styles directly into iframe head + hide inner scrollbar
+    const editorStyle = doc.createElement("style");
+    editorStyle.setAttribute("data-email-injected-style", "true");
+    editorStyle.textContent = `
+      html, body {
+        overflow-x: hidden !important;
+        overflow-y: hidden !important;
+        height: auto !important;
+      }
+      *:hover {
+        outline: 1.5px dashed #93c5fd !important;
+        outline-offset: 1px !important;
+        cursor: pointer !important;
+      }
+      .editor-active-selected {
+        outline: 2.5px solid #2563eb !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25) !important;
+        border-radius: 2px !important;
+      }
+      img.editor-active-selected {
+        cursor: default !important;
+      }
+    `;
+    doc.head?.appendChild(editorStyle);
+
+    // Auto-adjust iframe height to email content so no inner scrollbar appears
+    const updateIframeHeight = () => {
+      if (iframe && doc && doc.documentElement) {
+        const h = Math.max(doc.documentElement.offsetHeight, doc.body ? doc.body.offsetHeight : 0, 500);
+        iframe.style.height = `${h + 20}px`;
+      }
+    };
+    updateIframeHeight();
+    setTimeout(updateIframeHeight, 150);
+
+    // ResizeObserver watches content changes and updates iframe height dynamically
+    try {
+      const ro = new ResizeObserver(() => {
+        updateIframeHeight();
+      });
+      if (doc.body) ro.observe(doc.body);
+    } catch {}
+
+    setIframeDomRoot(doc.body);
 
     // Enable inline contentEditable on text leaf elements & disable phantom image drag
     const editableTags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "td", "li", "button", "b", "strong", "em", "div"];
-    container.querySelectorAll("*").forEach((node) => {
+    doc.querySelectorAll("*").forEach((node) => {
       const el = node as HTMLElement;
       if (el.tagName.toLowerCase() === "img") {
         el.setAttribute("draggable", "false");
+        el.addEventListener("load", updateIframeHeight);
       }
       if (editableTags.includes(el.tagName.toLowerCase())) {
         const hasBlockChildren = Array.from(el.children).some((c) =>
@@ -483,8 +531,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     });
 
     // Re-synchronize selected element and Style Inspector with undone/redone state
-    if (selectedPath) {
-      const reselectedEl = getFromDomPath(selectedPath, container);
+    if (selectedPath && doc.body) {
+      const reselectedEl = getFromDomPath(selectedPath, doc.body);
       if (reselectedEl) {
         reselectedEl.classList.add("editor-active-selected");
         selectedDomElementRef.current = reselectedEl;
@@ -619,8 +667,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
   // Restore selection range when user clicks toolbar buttons
   const restoreRange = useCallback(() => {
+    const iframe = emailIframeRef.current;
+    const win = iframe?.contentWindow || window;
     if (savedRange) {
-      const selection = window.getSelection();
+      const selection = win.getSelection();
       if (selection) {
         selection.removeAllRanges();
         selection.addRange(savedRange);
@@ -631,7 +681,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   // Execute standard text formatting commands and pipe cleanly into undo/redo history
   const handleFormatText = (command: "bold" | "italic" | "underline" | "superscript" | "subscript") => {
     restoreRange();
-    document.execCommand(command, false);
+    const doc = emailIframeRef.current?.contentDocument || document;
+    doc.execCommand(command, false);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
@@ -641,7 +692,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const handleApplyTextColor = (color: string) => {
     setSelectedTextColor(color);
     restoreRange();
-    document.execCommand("foreColor", false, color);
+    const doc = emailIframeRef.current?.contentDocument || document;
+    doc.execCommand("foreColor", false, color);
     setShowColorPopover(false);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
@@ -671,7 +723,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       const selection = window.getSelection();
       if (selection && selection.anchorNode) {
         let parentEl = selection.anchorNode.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : (selection.anchorNode as HTMLElement);
-        while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== emailContainerRef.current) {
+        const doc = emailIframeRef.current?.contentDocument;
+        while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== doc?.body) {
           parentEl = parentEl.parentElement;
         }
         if (parentEl && parentEl.tagName.toLowerCase() === "a") {
@@ -1351,7 +1404,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       <div className="editor-workspace">
         {/* Left / Center Canvas Area */}
         <div className="canvas-scroll-area" ref={canvasContainerRef} style={{ position: "relative" }}>
-          <div className="canvas-width-indicator">
+          <div className="canvas-width-indicator" style={{ width: canvasWidth, transition: isResizingMobile ? "none" : "width 0.28s cubic-bezier(0.4, 0, 0.2, 1)" }}>
             <div className="indicator-line"></div>
             <span className="indicator-text">{canvasWidth}</span>
             <div className="indicator-line"></div>
@@ -1362,85 +1415,26 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             className="email-iframe-wrapper"
             style={{ 
               width: canvasWidth, 
-              maxWidth: canvasWidth, 
               minHeight: "450px", 
               position: "relative",
               borderRadius: "8px",
               boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08)",
               background: "#ffffff",
               marginBottom: "60px",
-              transition: isResizingMobile ? "none" : "width 0.15s ease",
+              transition: isResizingMobile ? "none" : "width 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
             }}
           >
-            {/* Mobile Viewport Left & Right Interactive Drag Handles */}
-            {viewMode === "mobile" && (
-              <>
-                <div
-                  onPointerDown={(e) => handleResizePointerDown(e, "left")}
-                  title={`Drag to resize width (${mobileWidth}px)`}
-                  style={{
-                    position: "absolute",
-                    left: "-9px",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    width: "16px",
-                    height: "52px",
-                    borderRadius: "8px",
-                    background: "#ffffff",
-                    border: "1.5px solid #cbd5e1",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
-                    cursor: "ew-resize",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    zIndex: 20,
-                    userSelect: "none",
-                    touchAction: "none",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4f46e5")}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#cbd5e1")}
-                >
-                  <div style={{ width: "2px", height: "18px", background: "#94a3b8", borderRadius: "1px" }} />
-                </div>
-
-                <div
-                  onPointerDown={(e) => handleResizePointerDown(e, "right")}
-                  title={`Drag to resize width (${mobileWidth}px)`}
-                  style={{
-                    position: "absolute",
-                    right: "-9px",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    width: "16px",
-                    height: "52px",
-                    borderRadius: "8px",
-                    background: "#ffffff",
-                    border: "1.5px solid #cbd5e1",
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
-                    cursor: "ew-resize",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    zIndex: 20,
-                    userSelect: "none",
-                    touchAction: "none",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4f46e5")}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#cbd5e1")}
-                >
-                  <div style={{ width: "2px", height: "18px", background: "#94a3b8", borderRadius: "1px" }} />
-                </div>
-              </>
-            )}
-
-            <div
-              ref={emailContainerRef}
-              className="email-direct-dom-root"
+            <iframe
+              ref={emailIframeRef}
+              title="Email Canvas"
+              scrolling="no"
               style={{
                 width: "100%",
-                minHeight: "450px",
+                minHeight: "500px",
+                border: "none",
                 display: "block",
                 backgroundColor: "#ffffff",
+                overflow: "hidden",
               }}
             />
           </div>
@@ -1812,7 +1806,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             onRemoveStyle={handleRemoveStyle}
             onRenameStyle={handleRenameStyle}
             onSelectElement={handleSelectElement}
-            domRoot={emailContainerRef.current}
+            domRoot={iframeDomRoot || emailIframeRef.current?.contentDocument?.body || null}
           />
         </aside>
       </div>

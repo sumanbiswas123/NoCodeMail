@@ -47,8 +47,8 @@ const DomTreeNode: React.FC<DomTreeNodeProps> = ({
   }, [isParentOfSelected]);
 
   const children = useMemo(() => {
-    return Array.from(element.children).filter(
-      (c) => c instanceof HTMLElement && !c.classList.contains("editor-selection-overlay")
+    return Array.from(element.children || []).filter(
+      (c) => c && c.nodeType === 1 && !c.classList?.contains("editor-selection-overlay")
     ) as HTMLElement[];
   }, [element]);
 
