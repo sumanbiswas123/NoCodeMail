@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Plus, SlidersHorizontal, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, SlidersHorizontal, ChevronUp, ChevronDown, ChevronRight, AlignLeft, AlignCenter, AlignRight, Rows, Columns } from "lucide-react";
 import { BoxModel } from "./BoxModel";
 
 interface MatchedRule {
@@ -12,6 +12,7 @@ interface MatchedRule {
 interface StyleInspectorProps {
   selectedElement: HTMLElement | null;
   inlineStyles: Record<string, string>;
+  viewMode?: "desktop" | "mobile";
   onUpdateStyle: (property: string, value: string) => void;
   onRemoveStyle: (property: string) => void;
   onRenameStyle?: (oldProperty: string, newProperty: string, value: string) => void;
@@ -226,6 +227,7 @@ const CSS_VALUE_SUGGESTIONS: Record<string, string[]> = {
 export const StyleInspector: React.FC<StyleInspectorProps> = ({
   selectedElement,
   inlineStyles,
+  viewMode = "desktop",
   onUpdateStyle,
   onRemoveStyle,
   onRenameStyle,
@@ -639,6 +641,273 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Quick Layout & Alignment Toolbar (Smart Image/Text Alignment & Mobile Row/Stacking) */}
+      {selectedElement && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "6px 10px",
+            background: "#f1f5f9",
+            borderBottom: "1px solid #e2e8f0",
+            fontSize: "11px",
+            gap: "8px",
+          }}
+        >
+          {/* Alignment buttons */}
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <span style={{ color: "#64748b", fontWeight: "600", fontSize: "10.5px" }}>
+              Align {viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}:
+            </span>
+            <div style={{ display: "flex", background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "5px", overflow: "hidden" }}>
+              {/* ALIGN LEFT */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewMode === "mobile") {
+                    // Mobile-only alignment: switch mobile responsive class on image wrapper / column
+                    let targetNode: HTMLElement | null = selectedElement;
+                    let foundWrapper = false;
+                    while (targetNode && targetNode !== domRoot) {
+                      if (
+                        targetNode.classList?.contains("mobile-center-img") ||
+                        targetNode.classList?.contains("mobile-align-center") ||
+                        targetNode.classList?.contains("mobile-align-right") ||
+                        targetNode.classList?.contains("mobile-align-left") ||
+                        targetNode.classList?.contains("header-col")
+                      ) {
+                        targetNode.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-right");
+                        targetNode.classList.add("mobile-align-left");
+                        foundWrapper = true;
+                      }
+                      targetNode = targetNode.parentElement;
+                    }
+                    if (!foundWrapper) {
+                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
+                      col.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-right");
+                      col.classList.add("mobile-align-left");
+                    }
+                    onUpdateStyle("text-align", inlineStyles["text-align"] || "left");
+                  } else {
+                    // Desktop alignment: update standard inline styles
+                    onUpdateStyle("text-align", "left");
+                    onUpdateStyle("margin-left", "0px");
+                    onUpdateStyle("margin-right", "auto");
+                    if (selectedElement.tagName === "IMG") {
+                      selectedElement.setAttribute("align", "left");
+                    }
+                  }
+                }}
+                title={viewMode === "mobile" ? "Align Left on Mobile (preserves bottom spacing & desktop alignment)" : "Align Left on Desktop"}
+                style={{
+                  padding: "3px 7px",
+                  border: "none",
+                  background: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-left") || selectedElement.classList?.contains("mobile-align-left"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "left" || selectedElement.getAttribute("align") === "left"))
+                  ) ? "#e0e7ff" : "transparent",
+                  color: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-left") || selectedElement.classList?.contains("mobile-align-left"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "left" || selectedElement.getAttribute("align") === "left"))
+                  ) ? "#4f46e5" : "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <AlignLeft size={12} />
+              </button>
+
+              {/* ALIGN CENTER */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewMode === "mobile") {
+                    // Mobile-only alignment: switch mobile responsive class
+                    let targetNode: HTMLElement | null = selectedElement;
+                    let foundWrapper = false;
+                    while (targetNode && targetNode !== domRoot) {
+                      if (
+                        targetNode.classList?.contains("mobile-center-img") ||
+                        targetNode.classList?.contains("mobile-align-center") ||
+                        targetNode.classList?.contains("mobile-align-right") ||
+                        targetNode.classList?.contains("mobile-align-left") ||
+                        targetNode.classList?.contains("header-col")
+                      ) {
+                        targetNode.classList.remove("mobile-align-left", "mobile-align-right");
+                        targetNode.classList.add("mobile-align-center");
+                        foundWrapper = true;
+                      }
+                      targetNode = targetNode.parentElement;
+                    }
+                    if (!foundWrapper) {
+                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
+                      col.classList.remove("mobile-align-left", "mobile-align-right");
+                      col.classList.add("mobile-align-center");
+                    }
+                    onUpdateStyle("text-align", inlineStyles["text-align"] || "center");
+                  } else {
+                    // Desktop alignment: update standard inline styles
+                    onUpdateStyle("text-align", "center");
+                    onUpdateStyle("margin-left", "auto");
+                    onUpdateStyle("margin-right", "auto");
+                    if (selectedElement.tagName === "IMG") {
+                      selectedElement.setAttribute("align", "center");
+                    }
+                  }
+                }}
+                title={viewMode === "mobile" ? "Align Center on Mobile (preserves bottom spacing & desktop alignment)" : "Align Center on Desktop"}
+                style={{
+                  padding: "3px 7px",
+                  border: "none",
+                  background: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-center") || selectedElement.closest(".mobile-center-img") || selectedElement.classList?.contains("mobile-align-center") || selectedElement.classList?.contains("mobile-center-img"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "center" || selectedElement.getAttribute("align") === "center"))
+                  ) ? "#e0e7ff" : "transparent",
+                  color: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-center") || selectedElement.closest(".mobile-center-img") || selectedElement.classList?.contains("mobile-align-center") || selectedElement.classList?.contains("mobile-center-img"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "center" || selectedElement.getAttribute("align") === "center"))
+                  ) ? "#4f46e5" : "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <AlignCenter size={12} />
+              </button>
+
+              {/* ALIGN RIGHT */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewMode === "mobile") {
+                    // Mobile-only alignment: switch mobile responsive class
+                    let targetNode: HTMLElement | null = selectedElement;
+                    let foundWrapper = false;
+                    while (targetNode && targetNode !== domRoot) {
+                      if (
+                        targetNode.classList?.contains("mobile-center-img") ||
+                        targetNode.classList?.contains("mobile-align-center") ||
+                        targetNode.classList?.contains("mobile-align-right") ||
+                        targetNode.classList?.contains("mobile-align-left") ||
+                        targetNode.classList?.contains("header-col")
+                      ) {
+                        targetNode.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-left");
+                        targetNode.classList.add("mobile-align-right");
+                        foundWrapper = true;
+                      }
+                      targetNode = targetNode.parentElement;
+                    }
+                    if (!foundWrapper) {
+                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
+                      col.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-left");
+                      col.classList.add("mobile-align-right");
+                    }
+                    onUpdateStyle("text-align", inlineStyles["text-align"] || "right");
+                  } else {
+                    // Desktop alignment: update standard inline styles
+                    onUpdateStyle("text-align", "right");
+                    onUpdateStyle("margin-left", "auto");
+                    onUpdateStyle("margin-right", "0px");
+                    if (selectedElement.tagName === "IMG") {
+                      selectedElement.setAttribute("align", "right");
+                    }
+                  }
+                }}
+                title={viewMode === "mobile" ? "Align Right on Mobile (preserves bottom spacing & desktop alignment)" : "Align Right on Desktop"}
+                style={{
+                  padding: "3px 7px",
+                  border: "none",
+                  background: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-right") || selectedElement.classList?.contains("mobile-align-right"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "right" || selectedElement.getAttribute("align") === "right"))
+                  ) ? "#e0e7ff" : "transparent",
+                  color: (
+                    (viewMode === "mobile" && (selectedElement.closest(".mobile-align-right") || selectedElement.classList?.contains("mobile-align-right"))) ||
+                    (viewMode === "desktop" && (inlineStyles["text-align"] === "right" || selectedElement.getAttribute("align") === "right"))
+                  ) ? "#4f46e5" : "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <AlignRight size={12} />
+              </button>
+            </div>
+          </div>
+
+          {/* Row / Stack layout toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <span style={{ color: "#64748b", fontWeight: "600", fontSize: "10.5px" }}>Mobile:</span>
+            <div style={{ display: "flex", background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "5px", overflow: "hidden" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  // Find column ancestor (e.g. mj-column-per-X)
+                  let col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
+                  if (col) {
+                    col.style.setProperty("display", "block", "important");
+                    col.style.setProperty("width", "100%", "important");
+                    col.style.setProperty("max-width", "100%", "important");
+                    onUpdateStyle("display", "block");
+                    onUpdateStyle("width", "100%");
+                  }
+                }}
+                title="Stack into separate rows on mobile (Image top, Text bottom)"
+                style={{
+                  padding: "3px 6px",
+                  border: "none",
+                  background: "transparent",
+                  color: "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "3px",
+                  fontSize: "10.5px",
+                }}
+              >
+                <Rows size={11} />
+                <span>Stack</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Find sibling column and keep in same row
+                  let col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
+                  if (col && col.parentElement) {
+                    const siblings = Array.from(col.parentElement.children) as HTMLElement[];
+                    siblings.forEach((sib) => {
+                      sib.style.setProperty("display", "inline-block", "important");
+                    });
+                    onUpdateStyle("display", "inline-block");
+                    onUpdateStyle("vertical-align", "middle");
+                  }
+                }}
+                title="Keep image and text in the same row on mobile"
+                style={{
+                  padding: "3px 6px",
+                  border: "none",
+                  background: "transparent",
+                  color: "#475569",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "3px",
+                  fontSize: "10.5px",
+                }}
+              >
+                <Columns size={11} />
+                <span>1-Row</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* STYLES PANE */}
       <div className="styles-scroll-pane">

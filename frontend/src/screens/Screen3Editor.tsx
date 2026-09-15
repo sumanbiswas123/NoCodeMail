@@ -465,7 +465,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     doc.write(preparedHtml);
     doc.close();
 
-    // Inject editor outline & hover styles directly into iframe head + hide inner scrollbar
+    // Inject editor outline & hover styles directly into iframe head + responsive editor utility classes
     const editorStyle = doc.createElement("style");
     editorStyle.setAttribute("data-email-injected-style", "true");
     editorStyle.textContent = `
@@ -487,6 +487,18 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       }
       img.editor-active-selected {
         cursor: default !important;
+      }
+
+      /* Responsive Mobile Alignment Overrides (Preserves AI-analyzed spacing & padding without affecting Desktop) */
+      @media only screen and (max-width: 480px) {
+        .mobile-align-left table, .mobile-align-left img { margin: 0 auto 0 0 !important; }
+        .mobile-align-left { text-align: left !important; }
+
+        .mobile-align-center table, .mobile-align-center img { margin: 0 auto !important; }
+        .mobile-align-center { text-align: center !important; }
+
+        .mobile-align-right table, .mobile-align-right img { margin: 0 0 0 auto !important; }
+        .mobile-align-right { text-align: right !important; }
       }
     `;
     doc.head?.appendChild(editorStyle);
@@ -1802,6 +1814,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           <StyleInspector
             selectedElement={selectedDomElement}
             inlineStyles={inlineStyles}
+            viewMode={viewMode}
             onUpdateStyle={handleUpdateStyle}
             onRemoveStyle={handleRemoveStyle}
             onRenameStyle={handleRenameStyle}
