@@ -1,6 +1,33 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Plus, SlidersHorizontal, ChevronUp, ChevronDown, ChevronRight, AlignLeft, AlignCenter, AlignRight, Rows, Columns } from "lucide-react";
+import { 
+  Plus, 
+  SlidersHorizontal, 
+  ChevronUp, 
+  ChevronDown, 
+  ChevronRight, 
+  AlignLeft, 
+  AlignCenter, 
+  AlignRight, 
+  Rows, 
+  Columns, 
+  LayoutGrid, 
+  Layers, 
+  Search,
+  Sparkles,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  ArrowLeftCircle,
+  ArrowRightCircle,
+  ArrowUpDown,
+  ArrowLeftRight,
+  Image as ImageIcon,
+  FolderOpen,
+  Upload,
+  Smartphone,
+  Columns2
+} from "lucide-react";
 import { BoxModel } from "./BoxModel";
+import { EMAIL_COMPONENT_PRESETS, ComponentPreset } from "./ComponentPresets";
 
 interface MatchedRule {
   selector: string;
@@ -13,10 +40,23 @@ interface StyleInspectorProps {
   selectedElement: HTMLElement | null;
   inlineStyles: Record<string, string>;
   viewMode?: "desktop" | "mobile";
+  activeTab?: "components" | "styles";
+  onTabChange?: (tab: "components" | "styles") => void;
   onUpdateStyle: (property: string, value: string) => void;
   onRemoveStyle: (property: string) => void;
   onRenameStyle?: (oldProperty: string, newProperty: string, value: string) => void;
   onSelectElement?: (el: HTMLElement) => void;
+  onInsertPreset?: (presetHtml: string, targetPosition?: "bottom" | "top" | "left" | "right", targetScope?: "section" | "column") => void;
+  insertScope?: "column" | "section";
+  onInsertScopeChange?: (scope: "column" | "section") => void;
+  onSwapColumns?: () => void;
+  onSwapVerticalOrder?: () => void;
+  onQuickAlign?: (align: "left" | "center" | "right") => void;
+  onVerticalAlign?: (valign: "top" | "middle" | "bottom") => void;
+  onToggleSectionResponsiveness?: (isResponsive: boolean) => void;
+  isSectionResponsive?: boolean;
+  onReplaceImage?: (el: HTMLElement) => void;
+  onUpdateAttribute?: (el: HTMLElement, attr: string, value: string) => void;
   domRoot?: HTMLElement | null;
 }
 
@@ -228,12 +268,50 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   selectedElement,
   inlineStyles,
   viewMode = "desktop",
+  activeTab: activeTabProp,
+  onTabChange,
   onUpdateStyle,
   onRemoveStyle,
   onRenameStyle,
   onSelectElement,
+  onInsertPreset,
+  insertScope: insertScopeProp,
+  onInsertScopeChange,
+  onSwapColumns,
+  onSwapVerticalOrder,
+  onQuickAlign,
+  onVerticalAlign,
+  onToggleSectionResponsiveness,
+  isSectionResponsive = true,
+  onReplaceImage,
+  onUpdateAttribute,
   domRoot,
 }) => {
+  // Main Panel Tab: "components" (default) vs "styles"
+  const [internalTab, setInternalTab] = useState<"components" | "styles">("components");
+  const activeTab = activeTabProp !== undefined ? activeTabProp : internalTab;
+
+  const handleTabClick = (tab: "components" | "styles") => {
+    setInternalTab(tab);
+    if (onTabChange) {
+      onTabChange(tab);
+    }
+  };
+
+  const [componentCategory, setComponentCategory] = useState<string>("all");
+  const [componentSearch, setComponentSearch] = useState<string>("");
+  const [insertDirection, setInsertDirection] = useState<"bottom" | "top" | "left" | "right">("bottom");
+  const [isSmartLayoutOpen, setIsSmartLayoutOpen] = useState<boolean>(false);
+  const [internalInsertScope, setInternalInsertScope] = useState<"column" | "section">("column");
+  const insertScope = insertScopeProp !== undefined ? insertScopeProp : internalInsertScope;
+
+  const handleScopeSelect = (scope: "column" | "section") => {
+    setInternalInsertScope(scope);
+    if (onInsertScopeChange) {
+      onInsertScopeChange(scope);
+    }
+  };
+
   const [showDomTree, setShowDomTree] = useState(true);
   const [filterText, setFilterText] = useState("");
   const [newProp, setNewProp] = useState("");
@@ -441,52 +519,729 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
     return entries.filter(([p, v]) => p.toLowerCase().includes(q) || v.toLowerCase().includes(q));
   }, [inlineStyles, filterText]);
 
+  // Filter component presets
+  const filteredPresets = useMemo(() => {
+    return EMAIL_COMPONENT_PRESETS.filter((p) => {
+      const matchCat = componentCategory === "all" || p.category === componentCategory;
+      const matchQuery = !componentSearch.trim() || 
+        p.name.toLowerCase().includes(componentSearch.toLowerCase()) || 
+        p.description.toLowerCase().includes(componentSearch.toLowerCase());
+      return matchCat && matchQuery;
+    });
+  }, [componentCategory, componentSearch]);
+
   return (
-    <div className="style-inspector-container">
-      {/* Chrome DevTools Elements Tree View (Upside Collapsible Panel) */}
-      {showDomTree && (
-        <div
+    <div className="style-inspector-container" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Top Main Tab Switcher: Components vs Styles */}
+      <div 
+        style={{
+          display: "flex",
+          alignItems: "center",
+          borderBottom: "1px solid #e2e8f0",
+          background: "#f8fafc",
+          padding: "4px 8px",
+          gap: "6px",
+          flexShrink: 0,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => handleTabClick("components")}
           style={{
-            maxHeight: "220px",
-            minHeight: "100px",
-            overflow: "auto",
-            padding: "8px",
-            background: "#ffffff",
-            borderBottom: "1px solid #e2e8f0",
-            flexShrink: 0,
-            boxShadow: "inset 0 1px 3px rgba(0,0,0,0.04)",
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "6px",
+            padding: "6px 12px",
+            borderRadius: "6px",
+            border: activeTab === "components" ? "1px solid #cbd5e1" : "1px solid transparent",
+            background: activeTab === "components" ? "#ffffff" : "transparent",
+            color: activeTab === "components" ? "#4f46e5" : "#64748b",
+            fontWeight: activeTab === "components" ? "700" : "600",
+            fontSize: "11.5px",
+            cursor: "pointer",
+            boxShadow: activeTab === "components" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+            transition: "all 0.15s ease",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", padding: "0 4px" }}>
-            <span style={{ fontSize: "10.5px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              DOM Elements Tree
-            </span>
-            <span style={{ fontSize: "10px", color: "#94a3b8" }}>
-              Click any element to inspect & edit styles
-            </span>
+          <LayoutGrid size={13} />
+          <span>Components</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTabClick("styles")}
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "6px",
+            padding: "6px 12px",
+            borderRadius: "6px",
+            border: activeTab === "styles" ? "1px solid #cbd5e1" : "1px solid transparent",
+            background: activeTab === "styles" ? "#ffffff" : "transparent",
+            color: activeTab === "styles" ? "#4f46e5" : "#64748b",
+            fontWeight: activeTab === "styles" ? "700" : "600",
+            fontSize: "11.5px",
+            cursor: "pointer",
+            boxShadow: activeTab === "styles" ? "0 1px 3px rgba(0,0,0,0.06)" : "none",
+            transition: "all 0.15s ease",
+          }}
+        >
+          <SlidersHorizontal size={13} />
+          <span>Styles</span>
+        </button>
+      </div>
+
+      {/* -------------------- TAB 1: COMPONENTS PRESET LIBRARY -------------------- */}
+      {activeTab === "components" && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#f8fafc" }}>
+          {/* Target Insertion Scope & Direction Selector */}
+          <div style={{ padding: "10px 12px", borderBottom: "1px solid #e2e8f0", background: "#ffffff", flexShrink: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                <span style={{ fontSize: "11px", fontWeight: "700", color: "#334155" }}>Target Scope:</span>
+                <span style={{ fontSize: "10px", color: insertScope === "column" ? "#4f46e5" : "#059669", fontWeight: "600" }}>
+                  {insertScope === "column" ? "Inside Current Column" : "New Section Row"}
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                <button
+                  type="button"
+                  onClick={() => handleScopeSelect("column")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "4px",
+                    padding: "6px 6px",
+                    borderRadius: "5px",
+                    border: insertScope === "column" ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                    background: insertScope === "column" ? "#eef2ff" : "#f8fafc",
+                    color: insertScope === "column" ? "#4338ca" : "#64748b",
+                    fontWeight: insertScope === "column" ? "700" : "600",
+                    fontSize: "10.5px",
+                    cursor: "pointer",
+                    boxShadow: insertScope === "column" ? "0 1px 3px rgba(79,70,229,0.1)" : "none",
+                  }}
+                  title="Insert directly inside current column (under active text or button)"
+                >
+                  <Plus size={12} />
+                  <span>Inside Column</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleScopeSelect("section")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "4px",
+                    padding: "6px 6px",
+                    borderRadius: "5px",
+                    border: insertScope === "section" ? "1.5px solid #059669" : "1px solid #e2e8f0",
+                    background: insertScope === "section" ? "#ecfdf5" : "#f8fafc",
+                    color: insertScope === "section" ? "#047857" : "#64748b",
+                    fontWeight: insertScope === "section" ? "700" : "600",
+                    fontSize: "10.5px",
+                    cursor: "pointer",
+                    boxShadow: insertScope === "section" ? "0 1px 3px rgba(5,150,105,0.1)" : "none",
+                  }}
+                  title="Insert as a standalone 700px section row outside below"
+                >
+                  <Rows size={12} />
+                  <span>New Section Row</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Placement Position Selector */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                <span style={{ fontSize: "10.5px", fontWeight: "600", color: "#64748b" }}>Placement Position:</span>
+              </div>
+              {insertScope === "column" ? (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "4px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("bottom")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "3px",
+                      padding: "5px 2px",
+                      borderRadius: "5px",
+                      border: insertDirection === "bottom" ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                      background: insertDirection === "bottom" ? "#e0e7ff" : "#f8fafc",
+                      color: insertDirection === "bottom" ? "#4338ca" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "9.5px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert below the active element inside column"
+                  >
+                    <ArrowDownCircle size={11} />
+                    <span>Below</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("top")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "3px",
+                      padding: "5px 2px",
+                      borderRadius: "5px",
+                      border: insertDirection === "top" ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                      background: insertDirection === "top" ? "#e0e7ff" : "#f8fafc",
+                      color: insertDirection === "top" ? "#4338ca" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "9.5px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert above the active element inside column"
+                  >
+                    <ArrowUpCircle size={11} />
+                    <span>Above</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("left")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "3px",
+                      padding: "5px 2px",
+                      borderRadius: "5px",
+                      border: insertDirection === "left" ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                      background: insertDirection === "left" ? "#e0e7ff" : "#f8fafc",
+                      color: insertDirection === "left" ? "#4338ca" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "9.5px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert side-by-side to the Left"
+                  >
+                    <ArrowLeftCircle size={11} />
+                    <span>+ Left</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("right")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "3px",
+                      padding: "5px 2px",
+                      borderRadius: "5px",
+                      border: insertDirection === "right" ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                      background: insertDirection === "right" ? "#e0e7ff" : "#f8fafc",
+                      color: insertDirection === "right" ? "#4338ca" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "9.5px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert side-by-side to the Right"
+                  >
+                    <ArrowRightCircle size={11} />
+                    <span>+ Right</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("bottom")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      padding: "5px 4px",
+                      borderRadius: "5px",
+                      border: insertDirection === "bottom" ? "1.5px solid #059669" : "1px solid #e2e8f0",
+                      background: insertDirection === "bottom" ? "#ecfdf5" : "#f8fafc",
+                      color: insertDirection === "bottom" ? "#047857" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "10px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert new section row below current section"
+                  >
+                    <ArrowDownCircle size={11} />
+                    <span>Row Below</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setInsertDirection("top")}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      padding: "5px 4px",
+                      borderRadius: "5px",
+                      border: insertDirection === "top" ? "1.5px solid #059669" : "1px solid #e2e8f0",
+                      background: insertDirection === "top" ? "#ecfdf5" : "#f8fafc",
+                      color: insertDirection === "top" ? "#047857" : "#64748b",
+                      fontWeight: "700",
+                      fontSize: "10px",
+                      cursor: "pointer",
+                    }}
+                    title="Insert new section row above current section"
+                  >
+                    <ArrowUpCircle size={11} />
+                    <span>Row Above</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
-          {domRoot ? (
-            <DomTreeNode
-              element={domRoot}
-              selectedElement={selectedElement}
-              onSelectElement={(el) => onSelectElement && onSelectElement(el)}
-              depth={0}
-            />
-          ) : selectedElement ? (
-            <DomTreeNode
-              element={(selectedElement.closest(".email-direct-dom-root") as HTMLElement) || selectedElement}
-              selectedElement={selectedElement}
-              onSelectElement={(el) => onSelectElement && onSelectElement(el)}
-              depth={0}
-            />
-          ) : (
-            <div style={{ fontSize: "11px", color: "#94a3b8", padding: "8px" }}>
-              Click an element on the canvas to view its DOM structure
+          {/* Smart Layout Switcher & Quick Align Bar (Collapsible by default) */}
+          <div style={{ background: "#f1f5f9", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setIsSmartLayoutOpen(!isSmartLayoutOpen)}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                background: "transparent",
+                border: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                cursor: "pointer",
+              }}
+              title="Click to expand/collapse Smart Layout Actions"
+            >
+              <span style={{ fontSize: "10.5px", fontWeight: "700", color: "#334155", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                Smart Layout Actions
+              </span>
+              {isSmartLayoutOpen ? <ChevronDown size={13} color="#64748b" /> : <ChevronRight size={13} color="#64748b" />}
+            </button>
+
+            {isSmartLayoutOpen && (
+              <div style={{ padding: "0 12px 10px 12px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                {/* Layout Order Swaps */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                  <button
+                    type="button"
+                    onClick={onSwapColumns}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "1px solid #cbd5e1",
+                      background: "#ffffff",
+                      color: "#1e293b",
+                      fontSize: "10.5px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                    }}
+                    title="Swap Left and Right Columns in place"
+                  >
+                    <ArrowLeftRight size={12} color="#4f46e5" />
+                    <span>Swap L ↔ R</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSwapVerticalOrder}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "4px",
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "1px solid #cbd5e1",
+                      background: "#ffffff",
+                      color: "#1e293b",
+                      fontSize: "10.5px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                    }}
+                    title="Swap Top and Bottom Content (e.g. Text vs Button order)"
+                  >
+                    <ArrowUpDown size={12} color="#4f46e5" />
+                    <span>Swap Top ↕ Bottom</span>
+                  </button>
+                </div>
+
+                {/* Horizontal Alignment */}
+                <div>
+                  <div style={{ fontSize: "9.5px", fontWeight: "700", color: "#64748b", marginBottom: "3px" }}>
+                    HORIZONTAL ALIGN:
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => onQuickAlign && onQuickAlign("left")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Align all text and buttons to the Left"
+                    >
+                      <AlignLeft size={11} />
+                      <span>Left</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onQuickAlign && onQuickAlign("center")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Center align all text and buttons"
+                    >
+                      <AlignCenter size={11} />
+                      <span>Center</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onQuickAlign && onQuickAlign("right")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Align all text and buttons to the Right"
+                    >
+                      <AlignRight size={11} />
+                      <span>Right</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Vertical Alignment (Top / Middle / Bottom) */}
+                <div>
+                  <div style={{ fontSize: "9.5px", fontWeight: "700", color: "#64748b", marginBottom: "3px" }}>
+                    VERTICAL ALIGN (RELATIVE TO MEDIA):
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => onVerticalAlign && onVerticalAlign("top")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Align content to the Top"
+                    >
+                      <ChevronUp size={12} />
+                      <span>Top</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onVerticalAlign && onVerticalAlign("middle")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Align content to the Middle (Center)"
+                    >
+                      <span style={{ fontSize: "10px" }}>⏺️</span>
+                      <span>Middle</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onVerticalAlign && onVerticalAlign("bottom")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px",
+                        borderRadius: "4px",
+                        border: "1px solid #e2e8f0",
+                        background: "#ffffff",
+                        color: "#475569",
+                        fontSize: "10px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                      title="Align content to the Bottom"
+                    >
+                      <ChevronDown size={12} />
+                      <span>Bottom</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Section Mobile Responsiveness Toggle */}
+                <div>
+                  <div style={{ fontSize: "9.5px", fontWeight: "700", color: "#64748b", marginBottom: "3px" }}>
+                    MOBILE LAYOUT:
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => onToggleSectionResponsiveness && onToggleSectionResponsiveness(true)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px 6px",
+                        borderRadius: "4px",
+                        border: isSectionResponsive ? "1.5px solid #4f46e5" : "1px solid #e2e8f0",
+                        background: isSectionResponsive ? "#eef2ff" : "#ffffff",
+                        color: isSectionResponsive ? "#4338ca" : "#64748b",
+                        fontSize: "9.5px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title="Multi-column sections stack vertically on mobile screens (Default)"
+                    >
+                      <Smartphone size={11} />
+                      <span>📱 Stack (Default)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onToggleSectionResponsiveness && onToggleSectionResponsiveness(false)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "3px",
+                        padding: "4px 6px",
+                        borderRadius: "4px",
+                        border: !isSectionResponsive ? "1.5px solid #d97706" : "1px solid #e2e8f0",
+                        background: !isSectionResponsive ? "#fef3c7" : "#ffffff",
+                        color: !isSectionResponsive ? "#b45309" : "#64748b",
+                        fontSize: "9.5px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                      }}
+                      title="Keep columns side-by-side even on mobile screens"
+                    >
+                      <Columns2 size={11} />
+                      <span>↔️ Fixed Row</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Preset Search & Category Filter Pills */}
+          <div style={{ padding: "8px 12px", borderBottom: "1px solid #e2e8f0", background: "#ffffff", display: "flex", flexDirection: "column", gap: "6px", flexShrink: 0 }}>
+            <div style={{ position: "relative" }}>
+              <Search size={12} color="#94a3b8" style={{ position: "absolute", left: "8px", top: "50%", transform: "translateY(-50%)" }} />
+              <input
+                type="text"
+                placeholder="Search presets (e.g. text, columns, cards)..."
+                value={componentSearch}
+                onChange={(e) => setComponentSearch(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "5px 8px 5px 26px",
+                  borderRadius: "5px",
+                  border: "1px solid #cbd5e1",
+                  fontSize: "11px",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
             </div>
-          )}
+
+            <div style={{ display: "flex", gap: "4px", overflowX: "auto", paddingBottom: "2px" }}>
+              {[
+                { id: "all", label: "All" },
+                { id: "basic", label: "Single" },
+                { id: "2-col", label: "2 Columns" },
+                { id: "3-col", label: "3 Columns" },
+                { id: "4-col", label: "4 Columns" },
+              ].map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setComponentCategory(cat.id)}
+                  style={{
+                    padding: "3px 8px",
+                    borderRadius: "12px",
+                    border: componentCategory === cat.id ? "1px solid #4f46e5" : "1px solid #e2e8f0",
+                    background: componentCategory === cat.id ? "#4f46e5" : "#f8fafc",
+                    color: componentCategory === cat.id ? "#ffffff" : "#64748b",
+                    fontSize: "10.5px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Presets Grid List */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: "10px" }}>
+            {filteredPresets.map((preset) => (
+              <div
+                key={preset.id}
+                onClick={() => onInsertPreset && onInsertPreset(preset.generateHtml(), insertDirection, insertScope)}
+                style={{
+                  background: "#ffffff",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                  padding: "10px",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#4f46e5";
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                  e.currentTarget.style.boxShadow = "0 3px 8px rgba(79, 70, 229, 0.12)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#e2e8f0";
+                  e.currentTarget.style.transform = "none";
+                  e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.03)";
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{ width: "24px", height: "24px", borderRadius: "5px", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {preset.icon}
+                    </div>
+                    <span style={{ fontWeight: "700", fontSize: "12px", color: "#0f172a" }}>{preset.name}</span>
+                  </div>
+                  <span style={{ fontSize: "10px", padding: "2px 6px", borderRadius: "4px", background: "#e0e7ff", color: "#4338ca", fontWeight: "700" }}>
+                    + Add
+                  </span>
+                </div>
+                {preset.preview && (
+                  <div style={{ marginTop: "2px", marginBottom: "2px" }}>
+                    {preset.preview}
+                  </div>
+                )}
+                <p style={{ margin: 0, fontSize: "11px", color: "#64748b", lineHeight: "15px" }}>
+                  {preset.description}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* -------------------- TAB 2: DEVTOOLS STYLE INSPECTOR & DOM TREE -------------------- */}
+      {activeTab === "styles" && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* Chrome DevTools Elements Tree View (Upside Collapsible Panel) */}
+          {showDomTree && (
+            <div
+              style={{
+                maxHeight: "220px",
+                minHeight: "100px",
+                overflow: "auto",
+                padding: "8px",
+                background: "#ffffff",
+                borderBottom: "1px solid #e2e8f0",
+                flexShrink: 0,
+                boxShadow: "inset 0 1px 3px rgba(0,0,0,0.04)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", padding: "0 4px" }}>
+                <span style={{ fontSize: "10.5px", fontWeight: "700", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  DOM Elements Tree
+                </span>
+                <span style={{ fontSize: "10px", color: "#94a3b8" }}>
+                  Click any element to inspect & edit styles
+                </span>
+              </div>
+
+              {domRoot ? (
+                <DomTreeNode
+                  element={domRoot}
+                  selectedElement={selectedElement}
+                  onSelectElement={(el) => onSelectElement && onSelectElement(el)}
+                  depth={0}
+                />
+              ) : selectedElement ? (
+                <DomTreeNode
+                  element={(selectedElement.closest(".email-direct-dom-root") as HTMLElement) || selectedElement}
+                  selectedElement={selectedElement}
+                  onSelectElement={(el) => onSelectElement && onSelectElement(el)}
+                  depth={0}
+                />
+              ) : (
+                <div style={{ fontSize: "11px", color: "#94a3b8", padding: "8px" }}>
+                  Click an element on the canvas to view its DOM structure
+                </div>
+              )}
+            </div>
+          )}
 
       {/* Chrome DevTools DOM Hierarchy Breadcrumb Bar */}
       {selectedElement && (
@@ -594,6 +1349,115 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                 </React.Fragment>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Image Properties & Asset Replacement Card */}
+      {selectedElement && selectedElement.tagName.toLowerCase() === "img" && (
+        <div style={{
+          margin: "8px 10px 4px",
+          padding: "8px 10px",
+          background: "#eff6ff",
+          border: "1px solid #bfdbfe",
+          borderRadius: "6px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          flexShrink: 0
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <ImageIcon size={13} color="#2563eb" />
+              <span style={{ fontSize: "11px", fontWeight: "700", color: "#1e3a8a" }}>Image Properties</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onReplaceImage && onReplaceImage(selectedElement)}
+              style={{
+                padding: "3px 8px",
+                background: "#2563eb",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "4px",
+                fontSize: "10.5px",
+                fontWeight: "700",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                boxShadow: "0 1px 2px rgba(37,99,235,0.2)",
+              }}
+              title="Replace image with a file from disk and copy to package assets"
+            >
+              <FolderOpen size={12} />
+              <span>Replace from Disk</span>
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{
+              width: "44px",
+              height: "44px",
+              borderRadius: "4px",
+              border: "1px solid #cbd5e1",
+              background: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+              flexShrink: 0
+            }}>
+              <img
+                src={(selectedElement as HTMLImageElement).src}
+                alt="Preview"
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+              />
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "9.5px", fontWeight: "600", color: "#64748b", width: "22px" }}>Src:</span>
+                <input
+                  type="text"
+                  value={(selectedElement as HTMLImageElement).getAttribute("src") || ""}
+                  onChange={(e) => {
+                    onUpdateAttribute && onUpdateAttribute(selectedElement, "src", e.target.value);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: "2px 5px",
+                    fontSize: "10px",
+                    borderRadius: "3px",
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    color: "#0f172a",
+                    outline: "none",
+                    fontFamily: "monospace"
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ fontSize: "9.5px", fontWeight: "600", color: "#64748b", width: "22px" }}>Alt:</span>
+                <input
+                  type="text"
+                  value={(selectedElement as HTMLImageElement).getAttribute("alt") || ""}
+                  onChange={(e) => {
+                    onUpdateAttribute && onUpdateAttribute(selectedElement, "alt", e.target.value);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: "2px 5px",
+                    fontSize: "10px",
+                    borderRadius: "3px",
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    color: "#0f172a",
+                    outline: "none",
+                  }}
+                  placeholder="Image alt description..."
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -845,25 +1709,46 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <span style={{ color: "#64748b", fontWeight: "600", fontSize: "10.5px" }}>Mobile:</span>
             <div style={{ display: "flex", background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "5px", overflow: "hidden" }}>
+              {/* STACK (2 Rows on Mobile: Image Top, Text Bottom) */}
               <button
                 type="button"
                 onClick={() => {
-                  // Find column ancestor (e.g. mj-column-per-X)
-                  let col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
-                  if (col) {
-                    col.style.setProperty("display", "block", "important");
-                    col.style.setProperty("width", "100%", "important");
-                    col.style.setProperty("max-width", "100%", "important");
-                    onUpdateStyle("display", "block");
-                    onUpdateStyle("width", "100%");
+                  // Find the multi-column section container
+                  let targetContainer: HTMLElement | null = selectedElement;
+                  while (targetContainer && targetContainer !== domRoot) {
+                    if (
+                      targetContainer.classList?.contains("header-group") ||
+                      targetContainer.classList?.contains("mobile-force-row") ||
+                      targetContainer.classList?.contains("mobile-force-stack") ||
+                      (targetContainer.parentElement && targetContainer.parentElement.querySelectorAll("[class*='mj-column']").length > 1)
+                    ) {
+                      break;
+                    }
+                    targetContainer = targetContainer.parentElement;
                   }
+
+                  const rowContainer = targetContainer?.parentElement && targetContainer.parentElement.querySelectorAll("[class*='mj-column']").length > 1
+                    ? targetContainer.parentElement
+                    : targetContainer || selectedElement;
+
+                  rowContainer.classList.remove("mobile-force-row");
+                  rowContainer.classList.add("mobile-force-stack");
+
+                  // Also ensure individual columns have responsive stacking class
+                  const columns = rowContainer.querySelectorAll("[class*='mj-column']");
+                  columns.forEach((col) => {
+                    (col as HTMLElement).classList.remove("mobile-force-row");
+                    (col as HTMLElement).classList.add("mobile-force-stack");
+                  });
+
+                  onUpdateStyle("text-align", inlineStyles["text-align"] || "left");
                 }}
-                title="Stack into separate rows on mobile (Image top, Text bottom)"
+                title="Stack into separate rows on mobile (Image top, Text bottom without altering Desktop)"
                 style={{
                   padding: "3px 6px",
                   border: "none",
-                  background: "transparent",
-                  color: "#475569",
+                  background: (selectedElement.closest(".mobile-force-stack") || (!selectedElement.closest(".mobile-force-row") && !selectedElement.closest(".header-group"))) ? "#e0e7ff" : "transparent",
+                  color: (selectedElement.closest(".mobile-force-stack") || (!selectedElement.closest(".mobile-force-row") && !selectedElement.closest(".header-group"))) ? "#4f46e5" : "#475569",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -874,26 +1759,46 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                 <Rows size={11} />
                 <span>Stack</span>
               </button>
+
+              {/* 1-ROW (Side-by-Side in same row on Mobile) */}
               <button
                 type="button"
                 onClick={() => {
-                  // Find sibling column and keep in same row
-                  let col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
-                  if (col && col.parentElement) {
-                    const siblings = Array.from(col.parentElement.children) as HTMLElement[];
-                    siblings.forEach((sib) => {
-                      sib.style.setProperty("display", "inline-block", "important");
-                    });
-                    onUpdateStyle("display", "inline-block");
-                    onUpdateStyle("vertical-align", "middle");
+                  // Find the multi-column section container
+                  let targetContainer: HTMLElement | null = selectedElement;
+                  while (targetContainer && targetContainer !== domRoot) {
+                    if (
+                      targetContainer.classList?.contains("header-group") ||
+                      targetContainer.classList?.contains("mobile-force-row") ||
+                      targetContainer.classList?.contains("mobile-force-stack") ||
+                      (targetContainer.parentElement && targetContainer.parentElement.querySelectorAll("[class*='mj-column']").length > 1)
+                    ) {
+                      break;
+                    }
+                    targetContainer = targetContainer.parentElement;
                   }
+
+                  const rowContainer = targetContainer?.parentElement && targetContainer.parentElement.querySelectorAll("[class*='mj-column']").length > 1
+                    ? targetContainer.parentElement
+                    : targetContainer || selectedElement;
+
+                  rowContainer.classList.remove("mobile-force-stack");
+                  rowContainer.classList.add("mobile-force-row");
+
+                  const columns = rowContainer.querySelectorAll("[class*='mj-column']");
+                  columns.forEach((col) => {
+                    (col as HTMLElement).classList.remove("mobile-force-stack");
+                    (col as HTMLElement).classList.add("mobile-force-row");
+                  });
+
+                  onUpdateStyle("text-align", inlineStyles["text-align"] || "left");
                 }}
-                title="Keep image and text in the same row on mobile"
+                title="Keep image and text in the same row on mobile without altering Desktop"
                 style={{
                   padding: "3px 6px",
                   border: "none",
-                  background: "transparent",
-                  color: "#475569",
+                  background: (selectedElement.closest(".mobile-force-row") || selectedElement.closest(".header-group")) ? "#e0e7ff" : "transparent",
+                  color: (selectedElement.closest(".mobile-force-row") || selectedElement.closest(".header-group")) ? "#4f46e5" : "#475569",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -1318,6 +2223,8 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
         <BoxModel {...metrics} />
       </div>
     </div>
+  )}
+</div>
   );
 };
 

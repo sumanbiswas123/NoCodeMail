@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { 
   Pencil, 
   Monitor, 
@@ -24,9 +24,15 @@ import {
   Palette,
   Image as ImageIcon,
   CheckSquare,
-  Square
+  Square,
+  Plus,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  ChevronUp
 } from "lucide-react";
 import { StyleInspector } from "../components/StyleInspector";
+import { EMAIL_COMPONENT_PRESETS } from "../components/ComponentPresets";
 import { nativeIPC, BrowserInfo } from "../services/ipc";
 
 
@@ -134,6 +140,16 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   // History stack
   const [history, setHistory] = useState<string[]>([startHtml]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  const historyRef = useRef<string[]>([startHtml]);
+  const historyIndexRef = useRef<number>(0);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
 
   // Selected DOM element state
   const [selectedDomElement, setSelectedDomElement] = useState<HTMLElement | null>(null);
@@ -158,14 +174,18 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const pushHistory = useCallback((newHtml: string) => {
     if (!newHtml) return;
     setHistory((prev) => {
-      const updated = prev.slice(0, historyIndex + 1);
+      const currentIndex = historyIndexRef.current;
+      const updated = prev.slice(0, currentIndex + 1);
       if (updated[updated.length - 1] === newHtml) return prev;
       updated.push(newHtml);
+      historyRef.current = updated;
+      const nextIdx = updated.length - 1;
+      historyIndexRef.current = nextIdx;
+      setHistoryIndex(nextIdx);
       return updated;
     });
-    setHistoryIndex((prev) => prev + 1);
     setIsSaved(false);
-  }, [historyIndex]);
+  }, []);
 
   // Floating text formatting toolbar state
   const [floatingToolbarPos, setFloatingToolbarPos] = useState<{ top: number; left: number } | null>(null);
@@ -206,11 +226,87 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return stylesObj;
   };
 
+  const [inspectorTab, setInspectorTab] = useState<"components" | "styles">("components");
+  const inspectorTabRef = useRef<"components" | "styles">("components");
+  useEffect(() => {
+    inspectorTabRef.current = inspectorTab;
+  }, [inspectorTab]);
+
+  const [insertScope, setInsertScope] = useState<"column" | "section">("column");
+  const insertScopeRef = useRef<"column" | "section">("column");
+  useEffect(() => {
+    insertScopeRef.current = insertScope;
+  }, [insertScope]);
+
+  // Helper to find the true outermost section container when in Section mode
+  const findSectionElement = useCallback((target: HTMLElement, doc: Document): HTMLElement => {
+    if (!target || target === doc.body || target === doc.documentElement) return target;
+
+    // 1. If inside an explicit section wrapper
+    const wrapper = target.closest(".email-section-wrapper, [class*='mj-section']") as HTMLElement;
+    if (wrapper && wrapper !== doc.body) return wrapper;
+
+    // 2. Check if target is inside an MJML section div (div with max-width: 600px/700px or margin:0px auto)
+    let check: HTMLElement | null = target;
+    while (check && check !== doc.body && check !== doc.documentElement) {
+      if (
+        check.tagName === "DIV" &&
+        (check.style.maxWidth || check.getAttribute("style")?.includes("max-width") || check.classList.contains("mj-section")) &&
+        (check.parentElement === doc.body || check.parentElement?.parentElement === doc.body || check.parentElement?.tagName === "BODY" || check.parentElement?.classList?.contains("mj-body"))
+      ) {
+        return check;
+      }
+      check = check.parentElement;
+    }
+
+    // 3. Traditional table-based email:
+    let containerTable: HTMLElement | null = null;
+    check = target;
+    while (check && check !== doc.body) {
+      if (
+        check.tagName === "TABLE" &&
+        (check.getAttribute("width") === "700" || check.getAttribute("width") === "600" || check.style.maxWidth === "700px" || check.style.maxWidth === "600px" || check.classList.contains("email-container"))
+      ) {
+        containerTable = check;
+        break;
+      }
+      check = check.parentElement;
+    }
+
+    if (containerTable) {
+      check = target;
+      while (check && check.parentElement && check.parentElement !== containerTable && check.parentElement.parentElement !== containerTable) {
+        check = check.parentElement;
+      }
+      if (check && check !== containerTable) {
+        return check;
+      }
+    }
+
+    // 4. General fallback: climb up until parent is doc.body or direct child of doc.body
+    let curr: HTMLElement = target;
+    while (
+      curr.parentElement &&
+      curr.parentElement !== doc.body &&
+      curr.parentElement.parentElement !== doc.body &&
+      curr.parentElement !== doc.documentElement
+    ) {
+      curr = curr.parentElement;
+    }
+    return curr;
+  }, []);
+
   // Handler for selecting an element in the email canvas
   const handleSelectElement = useCallback((target: HTMLElement) => {
     if (!target) return;
     const doc = emailIframeRef.current?.contentDocument;
     if (doc && (target === doc.body || target === doc.documentElement)) return;
+
+    let finalTarget = target;
+    // In "New Section Row" mode, ALWAYS ensure we select the main outer section parent
+    if (insertScopeRef.current === "section" && doc) {
+      finalTarget = findSectionElement(target, doc);
+    }
 
     // Deselect previous node
     if (doc) {
@@ -219,14 +315,39 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       });
     }
 
-    target.classList.add("editor-active-selected");
-    selectedDomElementRef.current = target;
-    setSelectedDomElement(target);
-    setSelectedTagName(target.tagName.toLowerCase());
+    finalTarget.classList.add("editor-active-selected");
+    selectedDomElementRef.current = finalTarget;
+    setSelectedDomElement(finalTarget);
+    setSelectedTagName(finalTarget.tagName.toLowerCase());
 
-    const styles = extractElementStyles(target);
+    const styles = extractElementStyles(finalTarget);
     setInlineStyles(styles);
+  }, [findSectionElement]);
+
+  const handleInsertScopeChange = useCallback((scope: "column" | "section") => {
+    setInsertScope(scope);
+    insertScopeRef.current = scope;
+    const doc = emailIframeRef.current?.contentDocument;
+    if (scope === "section" && selectedDomElementRef.current && doc) {
+      const section = findSectionElement(selectedDomElementRef.current, doc);
+      if (section) {
+        handleSelectElement(section);
+      }
+    }
+  }, [findSectionElement, handleSelectElement]);
+
+  const handleTabChange = useCallback((tab: "components" | "styles") => {
+    setInspectorTab(tab);
+    inspectorTabRef.current = tab;
   }, []);
+
+  const isSelectedSectionResponsive = useMemo(() => {
+    if (!selectedDomElement) return true;
+    const doc = emailIframeRef.current?.contentDocument;
+    if (!doc) return true;
+    const section = findSectionElement(selectedDomElement, doc);
+    return !section?.classList.contains("mobile-force-row");
+  }, [selectedDomElement, findSectionElement, historyIndex]);
 
   // Export clean HTML (strips editor attributes and preserves original document envelope 1:1)
   const exportPristineHtml = useCallback((): string => {
@@ -269,134 +390,755 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return cleanHtml;
   }, [history, historyIndex, startHtml, pkgPrefix]);
 
-  // 1. Persistent event listeners on canvas container (registered once)
+  // Helper to enable contentEditable on text leaf elements in a DOM tree
+  const makeTextElementsEditable = useCallback((root: HTMLElement) => {
+    if (!root) return;
+    const editableTags = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "a", "td", "li", "button", "b", "strong", "em", "div"];
+    root.querySelectorAll("*").forEach((node) => {
+      const el = node as HTMLElement;
+      if (el.tagName.toLowerCase() === "img") {
+        el.setAttribute("draggable", "false");
+      }
+      if (editableTags.includes(el.tagName.toLowerCase())) {
+        const hasBlock = Array.from(el.children).some((c) =>
+          ["div", "table", "p", "h1", "h2", "h3", "h4", "h5", "h6", "section"].includes(c.tagName.toLowerCase())
+        );
+        if (!hasBlock) {
+          el.contentEditable = "true";
+          el.spellcheck = false;
+        }
+      }
+    });
+    if (editableTags.includes(root.tagName.toLowerCase())) {
+      const hasBlock = Array.from(root.children).some((c) =>
+        ["div", "table", "p", "h1", "h2", "h3", "h4", "h5", "h6", "section"].includes(c.tagName.toLowerCase())
+      );
+      if (!hasBlock) {
+        root.contentEditable = "true";
+        root.spellcheck = false;
+      }
+    }
+  }, []);
+
+  // Helper to extract inner widget (table, image, text) when inserting inside a column
+  const extractInnerWidget = useCallback((presetHtml: string): string => {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(presetHtml, "text/html");
+      const wrapper = doc.querySelector(".email-section-wrapper");
+      if (wrapper) {
+        return wrapper.innerHTML.trim();
+      }
+      return presetHtml.trim();
+    } catch {
+      return presetHtml.trim();
+    }
+  }, []);
+
+  // Handler for inserting preset component into the email DOM (supporting column-level and section-level scopes)
+  const handleInsertPreset = useCallback((
+    presetHtml: string,
+    targetPosition: "bottom" | "top" | "left" | "right" = "bottom",
+    targetScope: "section" | "column" = "column"
+  ) => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current;
+
+    // 1. COLUMN-LEVEL INSERTION: Insert widget directly inside current column/td
+    if (targetScope === "column" && selected && selected !== doc.body) {
+      let anchorEl: HTMLElement = selected;
+      while (
+        anchorEl.parentElement &&
+        anchorEl.parentElement.tagName.toLowerCase() !== "td" &&
+        anchorEl.parentElement.tagName.toLowerCase() !== "body" &&
+        !anchorEl.parentElement.classList?.contains("email-section-wrapper") &&
+        !["p", "div", "table", "h1", "h2", "h3", "h4", "h5", "h6", "img", "hr"].includes(anchorEl.tagName.toLowerCase())
+      ) {
+        anchorEl = anchorEl.parentElement;
+      }
+
+      const widgetHtml = extractInnerWidget(presetHtml);
+      const tempDiv = doc.createElement("div");
+      tempDiv.innerHTML = widgetHtml;
+
+      const insertedElements: HTMLElement[] = [];
+      const parent = anchorEl.parentElement || doc.body;
+
+      if (targetPosition === "top" || targetPosition === "left") {
+        while (tempDiv.firstChild) {
+          const child = tempDiv.firstChild;
+          if (child.nodeType === 1) {
+            insertedElements.push(child as HTMLElement);
+          }
+          parent.insertBefore(child, anchorEl);
+        }
+      } else {
+        const nextSibling = anchorEl.nextSibling;
+        while (tempDiv.firstChild) {
+          const child = tempDiv.firstChild;
+          if (child.nodeType === 1) {
+            insertedElements.push(child as HTMLElement);
+          }
+          parent.insertBefore(child, nextSibling);
+        }
+      }
+
+      makeTextElementsEditable(doc.body);
+      insertedElements.forEach((el) => {
+        const imgs = el.tagName?.toLowerCase() === "img" ? [el] : Array.from(el.querySelectorAll("img"));
+        imgs.forEach((img) => {
+          const imgEl = img as HTMLElement;
+          imgEl.style.cursor = "pointer";
+          imgEl.setAttribute("title", "Double-click to choose image from disk");
+          imgEl.addEventListener("dblclick", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isPickingImageRef.current) return;
+            isPickingImageRef.current = true;
+            handleReplaceImage(imgEl).finally(() => {
+              setTimeout(() => {
+                isPickingImageRef.current = false;
+              }, 500);
+            });
+          });
+        });
+      });
+
+      if (insertedElements.length > 0) {
+        handleSelectElement(insertedElements[0]);
+      }
+
+      setIsSaved(false);
+      isInternalUpdateRef.current = true;
+      pushHistory(exportPristineHtml());
+      return;
+    }
+
+    // 2. SECTION-LEVEL INSERTION: Standalone full 700px section row
+    const tempDiv = doc.createElement("div");
+    tempDiv.innerHTML = presetHtml.trim();
+    const newElement = tempDiv.firstElementChild as HTMLElement;
+    if (!newElement) return;
+
+    makeTextElementsEditable(newElement);
+
+    if (targetPosition === "left" || targetPosition === "right") {
+      let inserted = false;
+      const existingBtnTable = selected ? (selected.closest("table[role='presentation']") as HTMLElement || selected.querySelector("table[role='presentation']") as HTMLElement) : null;
+      const newBtnTable = newElement.querySelector("table[role='presentation']") as HTMLElement;
+
+      if (existingBtnTable && newBtnTable) {
+        const existingTd = existingBtnTable.closest("td");
+        if (existingTd && existingTd.parentElement && existingTd.parentElement.tagName === "TR") {
+          const newTd = doc.createElement("td");
+          newTd.style.padding = targetPosition === "left" ? "0 8px 0 0" : "0 0 0 8px";
+          newTd.setAttribute("valign", "middle");
+          newTd.setAttribute("align", "center");
+          newTd.appendChild(newBtnTable);
+          makeTextElementsEditable(newTd);
+
+          if (targetPosition === "left") {
+            existingTd.parentElement.insertBefore(newTd, existingTd);
+          } else {
+            existingTd.parentElement.insertBefore(newTd, existingTd.nextSibling);
+          }
+          inserted = true;
+          handleSelectElement(newTd);
+        }
+      }
+
+      if (!inserted) {
+        let col = selected ? (selected.closest("[class*='mj-column']") as HTMLElement || selected.querySelector("[class*='mj-column']") as HTMLElement || selected.closest("td") as HTMLElement) : null;
+        if (col && col.parentElement) {
+          if (col.classList.contains("mj-column-per-100") || col.style.width === "100%") {
+            col.classList.remove("mj-column-per-100");
+            col.classList.add("mj-column-per-50");
+            col.style.width = "50%";
+          }
+          const innerContent = newElement.querySelector("[class*='mj-column']") || newElement.querySelector("td") || newElement;
+          const newCol = doc.createElement("div");
+          newCol.className = "mj-column-per-50 mj-outlook-group-fix";
+          newCol.style.cssText = "font-size:0px;text-align:center;direction:ltr;display:inline-block;vertical-align:top;width:50%;";
+          newCol.innerHTML = innerContent.innerHTML;
+          makeTextElementsEditable(newCol);
+
+          if (targetPosition === "left") {
+            col.parentElement.insertBefore(newCol, col);
+          } else {
+            col.parentElement.insertBefore(newCol, col.nextSibling);
+          }
+          inserted = true;
+          handleSelectElement(newCol);
+        }
+      }
+
+      if (!inserted) {
+        if (selected) {
+          selected.insertAdjacentElement("afterend", newElement);
+        } else {
+          doc.body.appendChild(newElement);
+        }
+        handleSelectElement(newElement);
+      }
+    } else if (targetPosition === "top") {
+      // Row Above Insertion
+      if (selected) {
+        const targetSection = findSectionElement(selected, doc);
+        targetSection.insertAdjacentElement("beforebegin", newElement);
+      } else {
+        const container = doc.querySelector(".container") || doc.querySelector(".mj-body") || doc.body;
+        container.insertBefore(newElement, container.firstChild);
+      }
+      handleSelectElement(newElement);
+    } else {
+      // Row Below Insertion
+      if (selected) {
+        const targetSection = findSectionElement(selected, doc);
+        targetSection.insertAdjacentElement("afterend", newElement);
+      } else {
+        const container = doc.querySelector(".container") || doc.querySelector(".mj-body") || doc.body;
+        container.appendChild(newElement);
+      }
+      handleSelectElement(newElement);
+    }
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  }, [handleSelectElement, exportPristineHtml, pushHistory, makeTextElementsEditable, extractInnerWidget, findSectionElement]);
+
+  // Swap Left and Right columns in 2-column sections / cards
+  const handleSwapColumns = useCallback(() => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!selected) return;
+
+    const section = findSectionElement(selected, doc);
+    let columns = Array.from(section.querySelectorAll(":scope > table > tbody > tr > td > [class*='mj-column'], :scope [class*='mj-column']")) as HTMLElement[];
+    if (columns.length < 2) {
+      columns = Array.from(section.querySelectorAll(":scope > table > tbody > tr > td, :scope tr > td")) as HTMLElement[];
+    }
+    if (columns.length >= 2) {
+      const col1 = columns[0];
+      const col2 = columns[1];
+      if (col1.parentElement && col1.parentElement === col2.parentElement) {
+        col1.parentElement.insertBefore(col2, col1);
+
+        setIsSaved(false);
+        isInternalUpdateRef.current = true;
+        pushHistory(exportPristineHtml());
+        handleSelectElement(col2);
+      }
+    }
+  }, [findSectionElement, exportPristineHtml, pushHistory, handleSelectElement, selectedDomElement]);
+
+  // Swap Vertical Order (e.g. Text Top / Button Bottom <-> Button Top / Text Bottom)
+  const handleSwapVerticalOrder = useCallback(() => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!selected) return;
+
+    let container: HTMLElement | null = selected;
+    while (
+      container &&
+      container !== doc.body &&
+      container.tagName.toLowerCase() !== "td" &&
+      !container.classList.contains("mj-column-per-100") &&
+      !container.classList.contains("mj-column-per-50") &&
+      !container.classList.contains("mj-column-per-60") &&
+      !container.classList.contains("mj-column-per-40")
+    ) {
+      container = container.parentElement;
+    }
+
+    if (!container) container = selected.parentElement;
+    if (!container) return;
+
+    const innerTd = (container.querySelector("table > tbody > tr > td") as HTMLElement) || container;
+    const childBlocks = Array.from(innerTd.children).filter(
+      (c) => c.nodeType === 1 && !c.classList?.contains("editor-selection-overlay")
+    ) as HTMLElement[];
+
+    if (childBlocks.length >= 2) {
+      for (let i = childBlocks.length - 1; i >= 0; i--) {
+        innerTd.appendChild(childBlocks[i]);
+      }
+      setIsSaved(false);
+      isInternalUpdateRef.current = true;
+      pushHistory(exportPristineHtml());
+      handleSelectElement(childBlocks[0]);
+    }
+  }, [exportPristineHtml, pushHistory, handleSelectElement, selectedDomElement]);
+
+  // Quick 1-click alignment for all text, buttons, and images in the active section or column
+  const handleQuickAlign = useCallback((align: "left" | "center" | "right") => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!selected) return;
+
+    const targetScope = (selected.closest(".email-section-wrapper, [class*='mj-column'], td") as HTMLElement) || selected;
+
+    if (viewMode === "mobile") {
+      // Mobile-Aware Alignment (Applies responsive CSS classes so desktop styles are not overwritten or locked)
+      const mobileAlignClasses = ["mobile-align-left", "mobile-align-center", "mobile-align-right"];
+      const newClass = `mobile-align-${align}`;
+
+      mobileAlignClasses.forEach((c) => targetScope.classList.remove(c));
+      targetScope.classList.add(newClass);
+
+      if (selected !== targetScope) {
+        mobileAlignClasses.forEach((c) => selected.classList.remove(c));
+        selected.classList.add(newClass);
+      }
+
+      targetScope.querySelectorAll("table, img, div, p").forEach((n) => {
+        const el = n as HTMLElement;
+        mobileAlignClasses.forEach((c) => el.classList.remove(c));
+        el.classList.add(newClass);
+      });
+    } else {
+      // Desktop Alignment
+      // 1. Text elements
+      const textEls = targetScope.querySelectorAll("p, h1, h2, h3, h4, h5, h6, span, div:not([class*='mj-column']), td");
+      textEls.forEach((el) => {
+        const htmlEl = el as HTMLElement;
+        htmlEl.style.textAlign = align;
+        htmlEl.setAttribute("align", align);
+      });
+      if (["p", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div", "td"].includes(targetScope.tagName.toLowerCase())) {
+        targetScope.style.textAlign = align;
+        targetScope.setAttribute("align", align);
+      }
+
+      // 2. Buttons and Tables
+      const tables = targetScope.querySelectorAll("table");
+      tables.forEach((tbl) => {
+        const tableEl = tbl as HTMLElement;
+        tableEl.setAttribute("align", align);
+        if (align === "left") {
+          tableEl.style.marginLeft = "0";
+          tableEl.style.marginRight = "auto";
+        } else if (align === "center") {
+          tableEl.style.marginLeft = "auto";
+          tableEl.style.marginRight = "auto";
+        } else if (align === "right") {
+          tableEl.style.marginLeft = "auto";
+          tableEl.style.marginRight = "0";
+        }
+      });
+
+      // 3. Images and their parent tables/cells/divs
+      const imgs = targetScope.tagName.toLowerCase() === "img" ? [targetScope] : Array.from(targetScope.querySelectorAll("img"));
+      imgs.forEach((img) => {
+        const imgEl = img as HTMLElement;
+        imgEl.style.display = "block";
+        imgEl.setAttribute("align", align);
+        if (align === "left") {
+          imgEl.style.marginLeft = "0";
+          imgEl.style.marginRight = "auto";
+        } else if (align === "center") {
+          imgEl.style.marginLeft = "auto";
+          imgEl.style.marginRight = "auto";
+        } else if (align === "right") {
+          imgEl.style.marginLeft = "auto";
+          imgEl.style.marginRight = "0";
+        }
+
+        // Also align parent table, td, and div wrapper for bulletproof email rendering
+        let p: HTMLElement | null = imgEl.parentElement;
+        while (p && p !== targetScope.parentElement && p !== doc.body) {
+          if (p.tagName === "TD" || p.tagName === "DIV") {
+            p.style.textAlign = align;
+            p.setAttribute("align", align);
+          }
+          if (p.tagName === "TABLE") {
+            p.setAttribute("align", align);
+            if (align === "left") {
+              p.style.marginLeft = "0";
+              p.style.marginRight = "auto";
+            } else if (align === "center") {
+              p.style.marginLeft = "auto";
+              p.style.marginRight = "auto";
+            } else if (align === "right") {
+              p.style.marginLeft = "auto";
+              p.style.marginRight = "0";
+            }
+          }
+          p = p.parentElement;
+        }
+      });
+    }
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+    if (selected) {
+      setInlineStyles(extractElementStyles(selected));
+    }
+  }, [exportPristineHtml, pushHistory, extractElementStyles, selectedDomElement, viewMode]);
+
+  // Vertical Alignment: Top, Middle (Center), Bottom
+  const handleVerticalAlign = useCallback((valign: "top" | "middle" | "bottom") => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!selected) return;
+
+    // Find the entire section container so all sibling columns align consistently (e.g. Image and Text columns)
+    const section = findSectionElement(selected, doc);
+    if (!section) return;
+
+    // 1. Update all column containers in the section
+    const columns = Array.from(section.querySelectorAll("[class*='mj-column'], tr > td")) as HTMLElement[];
+    columns.forEach((col) => {
+      col.style.verticalAlign = valign;
+      col.setAttribute("valign", valign);
+
+      // 2. Update all tables, rows, cells inside each column
+      col.querySelectorAll("table, tr, td, div").forEach((node) => {
+        const el = node as HTMLElement;
+        el.style.verticalAlign = valign;
+        el.setAttribute("valign", valign);
+      });
+    });
+
+    // 3. Update section level tables & cells
+    section.querySelectorAll("table, tr, td").forEach((node) => {
+      const el = node as HTMLElement;
+      el.style.verticalAlign = valign;
+      el.setAttribute("valign", valign);
+    });
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+    if (selected) {
+      setInlineStyles(extractElementStyles(selected));
+    }
+  }, [exportPristineHtml, pushHistory, extractElementStyles, selectedDomElement]);
+
+  // Section-level Mobile Responsiveness (Stacking vs Fixed Row)
+  const handleToggleSectionResponsiveness = useCallback((isResponsive: boolean) => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!selected) return;
+
+    const section = findSectionElement(selected, doc);
+    if (!section) return;
+
+    if (isResponsive) {
+      section.classList.remove("mobile-force-row");
+      section.classList.add("mobile-force-stack");
+      section.querySelectorAll("table, tr, td, div").forEach((n) => {
+        (n as HTMLElement).classList.remove("mobile-force-row");
+      });
+    } else {
+      section.classList.remove("mobile-force-stack");
+      section.classList.add("mobile-force-row");
+    }
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  }, [findSectionElement, exportPristineHtml, pushHistory, selectedDomElement]);
+
+  const isPickingImageRef = useRef<boolean>(false);
+
+  const inputDebounceTimerRef = useRef<any>(null);
+
+  // Snapshot current DOM state into history cleanly
+  const commitCurrentDomToHistory = useCallback(() => {
+    if (inputDebounceTimerRef.current) {
+      clearTimeout(inputDebounceTimerRef.current);
+      inputDebounceTimerRef.current = null;
+    }
+    const currentClean = exportPristineHtml();
+    const currentIndex = historyIndexRef.current;
+    const currentSnapshot = historyRef.current[currentIndex];
+    if (currentClean && currentClean !== currentSnapshot) {
+      pushHistory(currentClean);
+    }
+  }, [exportPristineHtml, pushHistory]);
+
+  const handleUndo = useCallback(() => {
+    if (inputDebounceTimerRef.current) {
+      clearTimeout(inputDebounceTimerRef.current);
+      inputDebounceTimerRef.current = null;
+      const currentClean = exportPristineHtml();
+      const currentIndex = historyIndexRef.current;
+      if (currentClean && currentClean !== historyRef.current[currentIndex]) {
+        // User typed something and immediately hit undo: commit current dirty state first then step back to previous state
+        const updated = historyRef.current.slice(0, currentIndex + 1);
+        updated.push(currentClean);
+        historyRef.current = updated;
+        setHistory(updated);
+        setHistoryIndex(currentIndex);
+        historyIndexRef.current = currentIndex;
+        setIsSaved(false);
+        return;
+      }
+    }
+
+    const currentIndex = historyIndexRef.current;
+    if (currentIndex > 0) {
+      const targetIdx = currentIndex - 1;
+      historyIndexRef.current = targetIdx;
+      setHistoryIndex(targetIdx);
+      setIsSaved(false);
+    }
+  }, [exportPristineHtml]);
+
+  const handleRedo = useCallback(() => {
+    const currentIndex = historyIndexRef.current;
+    if (currentIndex < historyRef.current.length - 1) {
+      const targetIdx = currentIndex + 1;
+      historyIndexRef.current = targetIdx;
+      setHistoryIndex(targetIdx);
+      setIsSaved(false);
+    }
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    try {
+      commitCurrentDomToHistory();
+      const fullHtml = exportPristineHtml();
+      const saveTarget = initialFilePath || fileName;
+      await nativeIPC.saveFile(saveTarget, fullHtml);
+      setIsSaved(true);
+    } catch (e) {
+      console.error("Save error:", e);
+    }
+  }, [commitCurrentDomToHistory, exportPristineHtml, initialFilePath, fileName]);
+
+  // Unified keyboard shortcut handler (Ctrl+S, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+  const handleKeyDownShared = useCallback((e: KeyboardEvent) => {
+    const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+    if (cmdOrCtrl && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleSave();
+    } else if (cmdOrCtrl && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleUndo();
+    } else if (cmdOrCtrl && (e.key === "y" || e.key === "Y" || (e.shiftKey && (e.key === "z" || e.key === "Z")))) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleRedo();
+    }
+  }, [handleSave, handleUndo, handleRedo]);
+
+  const attachIframeListeners = useCallback((doc: Document, win: Window | null) => {
+    if (!doc || !doc.body) return;
+
+    const handleDocPointerDown = (e: MouseEvent) => {
+      let target = e.target as HTMLElement | null;
+      if (!target || target === doc.body || target === doc.documentElement) {
+        if (selectedDomElementRef.current) {
+          selectedDomElementRef.current.classList.remove("editor-active-selected");
+        }
+        selectedDomElementRef.current = null;
+        setSelectedDomElement(null);
+        setInlineStyles({});
+        setFloatingToolbarPos(null);
+        setShowLinkPopover(false);
+        setShowColorPopover(false);
+        setActiveLinkNode(null);
+        return;
+      }
+
+      // Enable contentEditable on text leaf elements if not already set
+      if (["h1","h2","h3","h4","h5","h6","p","span","a","td","li","b","strong","em","div"].includes(target.tagName.toLowerCase())) {
+        if (!target.contentEditable || target.contentEditable === "inherit" || target.contentEditable === "false") {
+          const hasBlock = Array.from(target.children).some((c) => ["div", "table", "p", "section"].includes(c.tagName.toLowerCase()));
+          if (!hasBlock) {
+            target.contentEditable = "true";
+            target.spellcheck = false;
+          }
+        }
+      }
+
+      // Check if clicked element is an Image
+      if (target.tagName.toLowerCase() === "img") {
+        const iframe = emailIframeRef.current;
+        const rect = target.getBoundingClientRect();
+        const iframeRect = iframe ? iframe.getBoundingClientRect() : { top: 0, left: 0 };
+        const topPos = Math.max(10, iframeRect.top + rect.top - 52);
+        const leftPos = Math.max(10, Math.min(window.innerWidth - 360, iframeRect.left + rect.left + rect.width / 2 - 170));
+        setFloatingToolbarPos({ top: topPos, left: leftPos });
+
+        const imgLink = target.closest("a") as HTMLAnchorElement | null;
+        setActiveLinkNode(imgLink);
+        if (imgLink) {
+          setLinkHref(imgLink.getAttribute("href") || "");
+          setLinkTargetBlank(imgLink.getAttribute("target") === "_blank");
+        } else {
+          setLinkHref("");
+          setLinkTargetBlank(false);
+        }
+      }
+
+      // If in "New Section Row" mode, selecting any component selects the outer section parent
+      if (inspectorTabRef.current === "components" && insertScopeRef.current === "section") {
+        const sectionTarget = findSectionElement(target, doc);
+        handleSelectElement(sectionTarget);
+      } else {
+        // In "Inside Column" or styles mode, select the exact element so user can edit text, style, or add components inside
+        handleSelectElement(target);
+      }
+    };
+
+    const handleDocDblClick = async (e: MouseEvent) => {
+      let target = e.target as HTMLElement | null;
+      if (!target) return;
+      const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement | null);
+      if (!imgEl) return;
+
+      e.stopPropagation();
+      e.preventDefault();
+
+      if (isPickingImageRef.current) return;
+      isPickingImageRef.current = true;
+
+      try {
+        const res = await nativeIPC.chooseImage();
+        if (res && res.success && res.path) {
+          const chosenPath = res.path;
+          const pkgDir = normalizedFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
+          const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
+
+          const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
+          let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
+          let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
+
+          imgEl.src = liveSrc;
+          imgEl.setAttribute("src", liveSrc);
+
+          setIsSaved(false);
+          isInternalUpdateRef.current = true;
+          pushHistory(exportPristineHtml());
+        }
+      } catch (err) {
+        console.error("Image replace error:", err);
+      } finally {
+        isPickingImageRef.current = false;
+      }
+    };
+
+    const handleDocInput = () => {
+      setIsSaved(false);
+      if (inputDebounceTimerRef.current) {
+        clearTimeout(inputDebounceTimerRef.current);
+      }
+      inputDebounceTimerRef.current = setTimeout(() => {
+        commitCurrentDomToHistory();
+      }, 500);
+    };
+
+    const handleDocBlur = () => {
+      commitCurrentDomToHistory();
+    };
+
+    const handleDocSelectionChange = () => {
+      if (!win) return;
+      const selection = win.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+        if (floatingToolbarRef.current && floatingToolbarRef.current.contains(document.activeElement)) {
+          return;
+        }
+        setFloatingToolbarPos(null);
+        setShowLinkPopover(false);
+        setShowColorPopover(false);
+        setActiveLinkNode(null);
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      const commonAncestor = range.commonAncestorContainer;
+      const anchorNode = commonAncestor.nodeType === Node.TEXT_NODE ? commonAncestor.parentElement : (commonAncestor as HTMLElement);
+
+      if (!anchorNode || !doc.body.contains(anchorNode)) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        setFloatingToolbarPos(null);
+        return;
+      }
+
+      let currentLink: HTMLAnchorElement | null = null;
+      let checkNode: HTMLElement | null = anchorNode;
+      while (checkNode && checkNode !== doc.body) {
+        if (checkNode.tagName.toLowerCase() === "a") {
+          currentLink = checkNode as HTMLAnchorElement;
+          break;
+        }
+        checkNode = checkNode.parentElement;
+      }
+
+      setActiveLinkNode(currentLink);
+      if (currentLink) {
+        setLinkHref(currentLink.getAttribute("href") || "");
+        setLinkTargetBlank(currentLink.getAttribute("target") === "_blank");
+      }
+
+      setSavedRange(range.cloneRange());
+
+      const iframe = emailIframeRef.current;
+      const iframeRect = iframe ? iframe.getBoundingClientRect() : { top: 0, left: 0 };
+      const topPos = Math.max(10, iframeRect.top + rect.top - 52);
+      const leftPos = Math.max(10, Math.min(window.innerWidth - 360, iframeRect.left + rect.left + rect.width / 2 - 170));
+      setFloatingToolbarPos({ top: topPos, left: leftPos });
+    };
+
+    doc.addEventListener("pointerdown", handleDocPointerDown, true);
+    doc.addEventListener("dblclick", handleDocDblClick, true);
+    doc.addEventListener("input", handleDocInput);
+    doc.addEventListener("blur", handleDocBlur, true);
+    doc.addEventListener("selectionchange", handleDocSelectionChange);
+    doc.addEventListener("keydown", handleKeyDownShared, true);
+    win?.addEventListener("keydown", handleKeyDownShared, true);
+  }, [findSectionElement, handleSelectElement, handleKeyDownShared, commitCurrentDomToHistory, exportPristineHtml, pushHistory, normalizedFolder, pkgPrefix]);
+
+  // 1. Persistent event listeners on main window & iframe load
   useEffect(() => {
     const iframe = emailIframeRef.current;
     if (!iframe) return;
 
-    const attachIframeListeners = () => {
+    const onLoad = () => {
       const doc = iframe.contentDocument;
-      if (!doc || !doc.body) return;
-
-      const handleDocPointerDown = (e: MouseEvent) => {
-        let target = e.target as HTMLElement | null;
-        if (!target || target === doc.body || target === doc.documentElement) {
-          if (selectedDomElementRef.current) {
-            selectedDomElementRef.current.classList.remove("editor-active-selected");
-          }
-          selectedDomElementRef.current = null;
-          setSelectedDomElement(null);
-          setInlineStyles({});
-          return;
-        }
-
-        handleSelectElement(target);
-      };
-
-      const handleDocDblClick = async (e: MouseEvent) => {
-        let target = e.target as HTMLElement | null;
-        if (!target) return;
-        if (target.tagName.toLowerCase() === "img" || target.querySelector("img")) {
-          const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement);
-          if (!imgEl) return;
-
-          try {
-            const res = await nativeIPC.chooseImage();
-            if (res.success && res.path) {
-              const chosenPath = res.path;
-              const pkgDir = normalizedFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
-              const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
-
-              const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
-              let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
-              let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
-
-              imgEl.src = liveSrc;
-              imgEl.setAttribute("src", liveSrc);
-
-              setIsSaved(false);
-              isInternalUpdateRef.current = true;
-              pushHistory(exportPristineHtml());
-            }
-          } catch (err) {
-            console.error("Image replace error:", err);
-          }
-        }
-      };
-
-      const handleDocInput = () => {
-        setIsSaved(false);
-      };
-
-      const handleDocSelectionChange = () => {
-        const win = iframe.contentWindow;
-        if (!win) return;
-        const selection = win.getSelection();
-        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-          if (floatingToolbarRef.current && floatingToolbarRef.current.contains(document.activeElement)) {
-            return;
-          }
-          setFloatingToolbarPos(null);
-          setShowLinkPopover(false);
-          setShowColorPopover(false);
-          setActiveLinkNode(null);
-          return;
-        }
-
-        const range = selection.getRangeAt(0);
-        const commonAncestor = range.commonAncestorContainer;
-        const anchorNode = commonAncestor.nodeType === Node.TEXT_NODE ? commonAncestor.parentElement : (commonAncestor as HTMLElement);
-
-        if (!anchorNode || !doc.body.contains(anchorNode)) {
-          setFloatingToolbarPos(null);
-          return;
-        }
-
-        const rect = range.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) {
-          setFloatingToolbarPos(null);
-          return;
-        }
-
-        let currentLink: HTMLAnchorElement | null = null;
-        let checkNode: HTMLElement | null = anchorNode;
-        while (checkNode && checkNode !== doc.body) {
-          if (checkNode.tagName.toLowerCase() === "a") {
-            currentLink = checkNode as HTMLAnchorElement;
-            break;
-          }
-          checkNode = checkNode.parentElement;
-        }
-
-        setActiveLinkNode(currentLink);
-        if (currentLink) {
-          setLinkHref(currentLink.getAttribute("href") || "");
-          setLinkTargetBlank(currentLink.getAttribute("target") === "_blank");
-        }
-
-        setSavedRange(range.cloneRange());
-
-        // Translate coordinates from iframe interior to parent window
-        const iframeRect = iframe.getBoundingClientRect();
-        const topPos = Math.max(10, iframeRect.top + rect.top - 52);
-        const leftPos = Math.max(10, Math.min(window.innerWidth - 360, iframeRect.left + rect.left + rect.width / 2 - 170));
-        setFloatingToolbarPos({ top: topPos, left: leftPos });
-      };
-
-      doc.addEventListener("pointerdown", handleDocPointerDown, true);
-      doc.addEventListener("click", handleDocPointerDown, true);
-      doc.addEventListener("dblclick", handleDocDblClick, true);
-      doc.addEventListener("input", handleDocInput);
-      doc.addEventListener("selectionchange", handleDocSelectionChange);
+      if (doc) attachIframeListeners(doc, iframe.contentWindow);
     };
 
-    attachIframeListeners();
-    iframe.addEventListener("load", attachIframeListeners);
+    iframe.addEventListener("load", onLoad);
+    window.addEventListener("keydown", handleKeyDownShared, true);
 
     return () => {
-      iframe.removeEventListener("load", attachIframeListeners);
+      iframe.removeEventListener("load", onLoad);
+      window.removeEventListener("keydown", handleKeyDownShared, true);
     };
-  }, [handleSelectElement, normalizedFolder, pkgPrefix, exportPristineHtml, pushHistory]);
+  }, [attachIframeListeners, handleKeyDownShared]);
 
   // 2. Mount document into direct DOM container on load or Undo/Redo
   useEffect(() => {
@@ -477,6 +1219,11 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       *:hover {
         outline: 1.5px dashed #93c5fd !important;
         outline-offset: 1px !important;
+      }
+      [contenteditable="true"], p, h1, h2, h3, h4, h5, h6, span, a, td, li {
+        cursor: text !important;
+      }
+      img, button, .email-section-wrapper {
         cursor: pointer !important;
       }
       .editor-active-selected {
@@ -499,6 +1246,25 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
         .mobile-align-right table, .mobile-align-right img { margin: 0 0 0 auto !important; }
         .mobile-align-right { text-align: right !important; }
+
+        /* Responsive Stacking & 1-Row Layout Controls */
+        .mobile-force-stack,
+        .mobile-force-stack > [class*="mj-column"],
+        .mobile-force-stack [class*="mj-column"] {
+          display: block !important;
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+
+        .mobile-force-row {
+          display: table !important;
+          width: 100% !important;
+        }
+        .mobile-force-row > [class*="mj-column"],
+        .mobile-force-row [class*="mj-column"] {
+          display: inline-block !important;
+          vertical-align: middle !important;
+        }
       }
     `;
     doc.head?.appendChild(editorStyle);
@@ -561,7 +1327,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       setSelectedDomElement(null);
       setInlineStyles({});
     }
-  }, [historyIndex, startHtml, pkgPrefix]);
+
+    // Attach all interactive & keyboard listeners to the freshly rendered iframe document
+    attachIframeListeners(doc, iframe.contentWindow);
+  }, [historyIndex, startHtml, pkgPrefix, attachIframeListeners]);
 
   // Style update handlers
   const handleUpdateStyle = (property: string, value: string) => {
@@ -677,6 +1446,37 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
   };
 
+  const handleReplaceImage = async (imgElement: HTMLElement) => {
+    if (!imgElement) return;
+    try {
+      const res = await nativeIPC.chooseImage();
+      if (res && res.success && res.path) {
+        let finalSrc = res.path;
+        if (fileFolder) {
+          const assetsDir = `${fileFolder}/assets`;
+          const copyRes = await nativeIPC.copyAsset(res.path, assetsDir);
+          if (copyRes && copyRes.success && copyRes.new_relative_path) {
+            finalSrc = pkgPrefix ? `${pkgPrefix}${copyRes.new_relative_path}` : copyRes.new_relative_path;
+          }
+        }
+        imgElement.setAttribute("src", finalSrc);
+        setIsSaved(false);
+        isInternalUpdateRef.current = true;
+        pushHistory(exportPristineHtml());
+      }
+    } catch (err) {
+      console.error("Error replacing image:", err);
+    }
+  };
+
+  const handleUpdateAttribute = (el: HTMLElement, attr: string, value: string) => {
+    if (!el) return;
+    el.setAttribute(attr, value);
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+  };
+
   // Restore selection range when user clicks toolbar buttons
   const restoreRange = useCallback(() => {
     const iframe = emailIframeRef.current;
@@ -721,7 +1521,36 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       url = `https://${url}`;
     }
 
-    if (activeLinkNode) {
+    const isImage = selectedDomElement?.tagName.toLowerCase() === "img";
+    const doc = emailIframeRef.current?.contentDocument;
+
+    if (isImage && selectedDomElement) {
+      if (activeLinkNode) {
+        activeLinkNode.setAttribute("href", url);
+        if (linkTargetBlank) {
+          activeLinkNode.setAttribute("target", "_blank");
+          activeLinkNode.setAttribute("rel", "noopener noreferrer");
+        } else {
+          activeLinkNode.removeAttribute("target");
+          activeLinkNode.removeAttribute("rel");
+        }
+      } else if (doc) {
+        const a = doc.createElement("a");
+        a.setAttribute("href", url);
+        if (linkTargetBlank) {
+          a.setAttribute("target", "_blank");
+          a.setAttribute("rel", "noopener noreferrer");
+        }
+        a.style.display = "inline-block";
+        a.style.textDecoration = "none";
+        const parent = selectedDomElement.parentElement;
+        if (parent) {
+          parent.insertBefore(a, selectedDomElement);
+          a.appendChild(selectedDomElement);
+          setActiveLinkNode(a);
+        }
+      }
+    } else if (activeLinkNode) {
       activeLinkNode.setAttribute("href", url);
       if (linkTargetBlank) {
         activeLinkNode.setAttribute("target", "_blank");
@@ -735,7 +1564,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       const selection = window.getSelection();
       if (selection && selection.anchorNode) {
         let parentEl = selection.anchorNode.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : (selection.anchorNode as HTMLElement);
-        const doc = emailIframeRef.current?.contentDocument;
         while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== doc?.body) {
           parentEl = parentEl.parentElement;
         }
@@ -749,7 +1577,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
 
     setShowLinkPopover(false);
-    setFloatingToolbarPos(null);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
@@ -769,35 +1596,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
     setActiveLinkNode(null);
     setShowLinkPopover(false);
-    setFloatingToolbarPos(null);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
-  };
-
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      setHistoryIndex(historyIndex - 1);
-      setIsSaved(false);
-    }
-  };
-
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      setHistoryIndex(historyIndex + 1);
-      setIsSaved(false);
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      const fullHtml = exportPristineHtml();
-      const saveTarget = initialFilePath || fileName;
-      await nativeIPC.saveFile(saveTarget, fullHtml);
-      setIsSaved(true);
-    } catch (e) {
-      console.error("Save error:", e);
-    }
   };
 
   const handleOpenCodeView = () => {
@@ -848,34 +1649,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       console.error("Failed to open browser:", err);
     }
   };
-
-  // Keyboard shortcut listeners (Ctrl+S, Ctrl+Z, Ctrl+Y) on both main window & iframe
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-      const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-
-      if (cmdOrCtrl && (e.key === "s" || e.key === "S")) {
-        e.preventDefault();
-        e.stopPropagation();
-        handleSave();
-      } else if (cmdOrCtrl && (e.key === "z" || e.key === "Z")) {
-        e.preventDefault();
-        e.stopPropagation();
-        handleUndo();
-      } else if (cmdOrCtrl && (e.key === "y" || e.key === "Y")) {
-        e.preventDefault();
-        e.stopPropagation();
-        handleRedo();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [historyIndex, history, fileName, initialFilePath]);
 
   return (
     <div className="screen3-container">
@@ -1456,14 +2229,14 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         {floatingToolbarPos && (
           <div
             ref={floatingToolbarRef}
-            className="editor-floating-toolbar"
+            className="floating-selection-toolbar"
             style={{
               position: "fixed",
               top: `${floatingToolbarPos.top}px`,
               left: `${floatingToolbarPos.left}px`,
               background: "#1e293b",
               borderRadius: "8px",
-              boxShadow: "0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.15)",
+              boxShadow: "0 6px 20px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)",
               display: "flex",
               alignItems: "center",
               gap: "2px",
@@ -1474,238 +2247,446 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            {/* 1. Link Button (Highlighted First if active link) */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowColorPopover(false);
-                setShowLinkPopover(!showLinkPopover);
-              }}
-              title={activeLinkNode ? "Edit Hyperlink (Active Link)" : "Insert Hyperlink"}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-                padding: "5px 8px",
-                borderRadius: "5px",
-                border: "none",
-                background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
-                color: "#ffffff",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "600",
-                transition: "all 0.1s ease",
-              }}
-            >
-              <Link2 size={13} color="#ffffff" />
-              {activeLinkNode && <span>Edit Link</span>}
-            </button>
-
-            {/* Unlink button if active link */}
-            {activeLinkNode && (
-              <button
-                type="button"
-                onClick={handleRemoveLink}
-                title="Remove Link (Unlink)"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  padding: "5px 7px",
-                  borderRadius: "5px",
-                  border: "none",
-                  background: "transparent",
-                  color: "#ef4444",
-                  cursor: "pointer",
-                }}
-              >
-                <Unlink size={13} />
-              </button>
-            )}
-
-            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-            {/* 2. Superscript (<sup>) */}
-            <button
-              type="button"
-              onClick={() => handleFormatText("superscript")}
-              title="Superscript (e.g. 1,2 or TM)"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "2px",
-                padding: "5px 7px",
-                borderRadius: "5px",
-                border: "none",
-                background: "transparent",
-                color: "#f8fafc",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "700",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <SuperIcon size={14} />
-              <span style={{ fontSize: "11px" }}>x²</span>
-            </button>
-
-            {/* 3. Subscript (<sub>) */}
-            <button
-              type="button"
-              onClick={() => handleFormatText("subscript")}
-              title="Subscript (e.g. H2O)"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "2px",
-                padding: "5px 7px",
-                borderRadius: "5px",
-                border: "none",
-                background: "transparent",
-                color: "#f8fafc",
-                cursor: "pointer",
-                fontSize: "12px",
-                fontWeight: "700",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <SubIcon size={14} />
-              <span style={{ fontSize: "11px" }}>x₂</span>
-            </button>
-
-            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-            {/* 4. Bold */}
-            <button
-              type="button"
-              onClick={() => handleFormatText("bold")}
-              title="Bold (Ctrl+B)"
-              style={{
-                padding: "5px 7px",
-                borderRadius: "5px",
-                border: "none",
-                background: "transparent",
-                color: "#f8fafc",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Bold size={13} />
-            </button>
-
-            {/* 5. Italic */}
-            <button
-              type="button"
-              onClick={() => handleFormatText("italic")}
-              title="Italic (Ctrl+I)"
-              style={{
-                padding: "5px 7px",
-                borderRadius: "5px",
-                border: "none",
-                background: "transparent",
-                color: "#f8fafc",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Italic size={13} />
-            </button>
-
-            {/* 6. Underline */}
-            <button
-              type="button"
-              onClick={() => handleFormatText("underline")}
-              title="Underline (Ctrl+U)"
-              style={{
-                padding: "5px 7px",
-                borderRadius: "5px",
-                border: "none",
-                background: "transparent",
-                color: "#f8fafc",
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <Underline size={13} />
-            </button>
-
-            <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-            {/* 7. Color Picker */}
-            <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowLinkPopover(false);
-                  setShowColorPopover(!showColorPopover);
-                }}
-                title="Change Text Color"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: "5px 7px",
-                  borderRadius: "5px",
-                  border: "none",
-                  background: showColorPopover ? "#334155" : "transparent",
-                  color: "#f8fafc",
-                  cursor: "pointer",
-                }}
-              >
-                <Palette size={13} />
-                <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: selectedTextColor, border: "1px solid #ffffff" }} />
-              </button>
-
-              {/* Color Swatch Popover */}
-              {showColorPopover && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: "50%",
-                    transform: "translateX(-50%)",
-                    marginTop: "8px",
-                    background: "#ffffff",
-                    borderRadius: "8px",
-                    padding: "8px",
-                    boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
-                    border: "1px solid #e2e8f0",
-                    display: "grid",
-                    gridTemplateColumns: "repeat(5, 20px)",
-                    gap: "6px",
-                    zIndex: 10000,
+            {/* If selected element is an Image, show Image Floating Toolbar */}
+            {selectedDomElement?.tagName.toLowerCase() === "img" ? (
+              <>
+                {/* 1. Image Link / Edit Link */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowColorPopover(false);
+                    setShowLinkPopover(!showLinkPopover);
                   }}
-                  onMouseDown={(e) => e.stopPropagation()}
+                  title={activeLinkNode ? "Edit Image Link" : "Add Link to Image"}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    padding: "5px 8px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
+                    color: "#ffffff",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                    transition: "all 0.1s ease",
+                  }}
                 >
-                  {[
-                    "#000000", "#151515", "#475569", "#94a3b8", "#ffffff",
-                    "#ef4444", "#f97316", "#eab308", "#16a34a", "#2563eb",
-                    "#4f46e5", "#7c3aed", "#9333ea", "#db2777", "#9e0b0f"
-                  ].map((c) => (
+                  <Link2 size={13} color="#ffffff" />
+                  <span>{activeLinkNode ? "Edit Link" : "Add Link"}</span>
+                </button>
+
+                {activeLinkNode && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveLink}
+                    title="Remove Link (Unlink Image)"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#ef4444",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Unlink size={13} />
+                  </button>
+                )}
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 2. Replace Image from computer */}
+                <button
+                  type="button"
+                  onClick={() => selectedDomElement && handleReplaceImage(selectedDomElement)}
+                  title="Replace Image from computer"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <ImageIcon size={13} color="#38bdf8" />
+                  <span>Replace</span>
+                </button>
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 3. Horizontal Alignment */}
+                <button
+                  type="button"
+                  onClick={() => handleQuickAlign("left")}
+                  title="Align Left"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <AlignLeft size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickAlign("center")}
+                  title="Center Align"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <AlignCenter size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickAlign("right")}
+                  title="Align Right"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <AlignRight size={13} />
+                </button>
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 4. Vertical Alignment */}
+                <button
+                  type="button"
+                  onClick={() => handleVerticalAlign("top")}
+                  title="Vertical Align Top"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleVerticalAlign("middle")}
+                  title="Vertical Align Middle"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer", fontSize: "10px" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  ⏺️
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleVerticalAlign("bottom")}
+                  title="Vertical Align Bottom"
+                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <ChevronDown size={13} />
+                </button>
+              </>
+            ) : (
+              <>
+                {/* 1. Link Button (Highlighted First if active link) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowColorPopover(false);
+                    setShowLinkPopover(!showLinkPopover);
+                  }}
+                  title={activeLinkNode ? "Edit Hyperlink (Active Link)" : "Insert Hyperlink"}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    padding: "5px 8px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
+                    color: "#ffffff",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    transition: "all 0.1s ease",
+                  }}
+                >
+                  <Link2 size={13} color="#ffffff" />
+                  {activeLinkNode && <span>Edit Link</span>}
+                </button>
+
+                {/* Unlink button if active link */}
+                {activeLinkNode && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveLink}
+                    title="Remove Link (Unlink)"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#ef4444",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Unlink size={13} />
+                  </button>
+                )}
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 2. Superscript (<sup>) */}
+                <button
+                  type="button"
+                  onClick={() => handleFormatText("superscript")}
+                  title="Superscript (e.g. 1,2 or TM)"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "2px",
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <SuperIcon size={14} />
+                  <span style={{ fontSize: "11px" }}>x²</span>
+                </button>
+
+                {/* 3. Subscript (<sub>) */}
+                <button
+                  type="button"
+                  onClick={() => handleFormatText("subscript")}
+                  title="Subscript (e.g. H2O)"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "2px",
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <SubIcon size={14} />
+                  <span style={{ fontSize: "11px" }}>x₂</span>
+                </button>
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 4. Bold */}
+                <button
+                  type="button"
+                  onClick={() => handleFormatText("bold")}
+                  title="Bold (Ctrl+B)"
+                  style={{
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Bold size={13} />
+                </button>
+
+                {/* 5. Italic */}
+                <button
+                  type="button"
+                  onClick={() => handleFormatText("italic")}
+                  title="Italic (Ctrl+I)"
+                  style={{
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Italic size={13} />
+                </button>
+
+                {/* 6. Underline */}
+                <button
+                  type="button"
+                  onClick={() => handleFormatText("underline")}
+                  title="Underline (Ctrl+U)"
+                  style={{
+                    padding: "5px 7px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Underline size={13} />
+                </button>
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                {/* 7. Color Picker */}
+                <div style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLinkPopover(false);
+                      setShowColorPopover(!showColorPopover);
+                    }}
+                    title="Change Text Color"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: showColorPopover ? "#334155" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Palette size={13} />
+                    <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: selectedTextColor, border: "1px solid #ffffff" }} />
+                  </button>
+
+                  {/* Color Swatch Popover */}
+                  {showColorPopover && (
                     <div
-                      key={c}
-                      onClick={() => handleApplyTextColor(c)}
                       style={{
-                        width: "20px",
-                        height: "20px",
-                        borderRadius: "4px",
-                        background: c,
-                        border: c === "#ffffff" ? "1px solid #cbd5e1" : "1px solid rgba(0,0,0,0.1)",
-                        cursor: "pointer",
-                        transition: "transform 0.1s ease",
+                        position: "absolute",
+                        top: "100%",
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        marginTop: "8px",
+                        background: "#ffffff",
+                        borderRadius: "8px",
+                        padding: "8px",
+                        boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+                        border: "1px solid #e2e8f0",
+                        display: "grid",
+                        gridTemplateColumns: "repeat(5, 20px)",
+                        gap: "6px",
+                        zIndex: 10000,
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.2)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
-                      title={c}
-                    />
-                  ))}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      {[
+                        "#000000", "#151515", "#475569", "#94a3b8", "#ffffff",
+                        "#ef4444", "#f97316", "#eab308", "#16a34a", "#2563eb",
+                        "#4f46e5", "#7c3aed", "#9333ea", "#db2777", "#9e0b0f"
+                      ].map((c) => (
+                        <div
+                          key={c}
+                          onClick={() => handleApplyTextColor(c)}
+                          style={{
+                            width: "20px",
+                            height: "20px",
+                            borderRadius: "4px",
+                            background: c,
+                            border: c === "#ffffff" ? "1px solid #cbd5e1" : "1px solid rgba(0,0,0,0.1)",
+                            cursor: "pointer",
+                            transition: "transform 0.1s ease",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.2)")}
+                          onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
+                          title={c}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+
+                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 4px" }}></div>
+
+                {/* Quick Add Elements inside column below active element */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const btnPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "button");
+                    if (btnPreset) {
+                      handleInsertPreset(btnPreset.generateHtml(), "bottom", "column");
+                    }
+                  }}
+                  title="Add Button inside this column below active text"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    padding: "4px 8px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "#4f46e5",
+                    color: "#ffffff",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: "700",
+                  }}
+                >
+                  <Plus size={12} />
+                  <span>Button</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const imgPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "image");
+                    if (imgPreset) {
+                      handleInsertPreset(imgPreset.generateHtml(), "bottom", "column");
+                    }
+                  }}
+                  title="Add Image inside this column below active text"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "3px",
+                    padding: "4px 8px",
+                    borderRadius: "5px",
+                    border: "none",
+                    background: "#334155",
+                    color: "#f8fafc",
+                    cursor: "pointer",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#475569")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "#334155")}
+                >
+                  <Plus size={12} />
+                  <span>Image</span>
+                </button>
+              </>
+            )}
 
             {/* Link Edit Popover */}
             {showLinkPopover && (
@@ -1717,22 +2698,37 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                   marginTop: "8px",
                   background: "#ffffff",
                   borderRadius: "8px",
-                  padding: "10px 12px",
+                  padding: "12px",
                   boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
-                  border: "1px solid #e2e8f0",
+                  border: "1px solid #cbd5e1",
                   display: "flex",
                   flexDirection: "column",
                   gap: "8px",
-                  minWidth: "280px",
+                  width: "280px",
                   zIndex: 10000,
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                  <Globe size={13} color="#64748b" />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <span style={{ fontSize: "11px", fontWeight: "700", color: "#334155" }}>
-                    {activeLinkNode ? "Edit Destination URL" : "Set Destination URL"}
+                    {selectedDomElement?.tagName.toLowerCase() === "img" ? "Image Link URL" : (activeLinkNode ? "Edit Link" : "Insert Link")}
                   </span>
+                  {activeLinkNode && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveLink}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#ef4444",
+                        fontSize: "10.5px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Remove Link
+                    </button>
+                  )}
                 </div>
                 <input
                   type="text"
@@ -1809,16 +2805,29 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           </div>
         )}
 
-        {/* Right Sidebar: Chrome DevTools Style Inspector */}
+        {/* Right Sidebar: Chrome DevTools Style Inspector & Component Library */}
         <aside className="editor-sidebar-inspector">
           <StyleInspector
             selectedElement={selectedDomElement}
             inlineStyles={inlineStyles}
             viewMode={viewMode}
+            activeTab={inspectorTab}
+            onTabChange={handleTabChange}
+            insertScope={insertScope}
+            onInsertScopeChange={handleInsertScopeChange}
+            onSwapColumns={handleSwapColumns}
+            onSwapVerticalOrder={handleSwapVerticalOrder}
+            onQuickAlign={handleQuickAlign}
+            onVerticalAlign={handleVerticalAlign}
+            onToggleSectionResponsiveness={handleToggleSectionResponsiveness}
+            isSectionResponsive={isSelectedSectionResponsive}
             onUpdateStyle={handleUpdateStyle}
             onRemoveStyle={handleRemoveStyle}
             onRenameStyle={handleRenameStyle}
             onSelectElement={handleSelectElement}
+            onInsertPreset={handleInsertPreset}
+            onReplaceImage={handleReplaceImage}
+            onUpdateAttribute={handleUpdateAttribute}
             domRoot={iframeDomRoot || emailIframeRef.current?.contentDocument?.body || null}
           />
         </aside>
