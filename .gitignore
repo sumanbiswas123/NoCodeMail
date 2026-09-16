@@ -9,13 +9,15 @@ pdf_oxide_engine.dll
 pdf_oxide_html_test/
 oxide_bridge.py
 
-# Embedded UI bundles (both root ui/ and src/embedded_ui/)
+# Embedded UI bundle
 ui/
 src/embedded_ui/
 Screens UI/
 
-# Embedded binaries
-src/embedded_bins/
+# Embedded vendor binaries (needed for main.zig @embedFile)
+!src/embedded_bins/
+!src/embedded_bins/pdfium.dll
+!src/embedded_bins/WebView2Loader.dll
 
 # Node / Frontend build artifacts & dependencies
 **/node_modules/
@@ -23,9 +25,10 @@ src/embedded_bins/
 **/dist-ssr/
 *.tsbuildinfo
 
-# Binary executables and library files
+# Binary executables and library files (excluding embedded vendor binaries)
 *.exe
 *.dll
+!src/embedded_bins/*.dll
 *.so
 *.dylib
 *.pdb

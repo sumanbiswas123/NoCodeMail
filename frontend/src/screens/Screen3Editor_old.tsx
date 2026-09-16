@@ -131,68 +131,25 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const rawFolder = initialFilePath && (initialFilePath.includes("/") || initialFilePath.includes("\\"))
     ? initialFilePath.replace(/[/\\][^/\\]+$/, "")
     : "";
-  const fileFolder = rawFolder;
+  const fileFolder = rawFolder || localStorage.getItem("nocodemail_last_pkg_dir") || "";
   const normalizedFolder = fileFolder ? fileFolder.replace(/\\/g, "/") : "";
   const pkgPrefix = normalizedFolder ? `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/` : "";
 
   const startHtml = initialHtml && initialHtml.trim() ? initialHtml : DEFAULT_FALLBACK_HTML;
-  const HISTORY_LIMIT = 80;
-  const EDITOR_STYLE_ATTR = "data-email-editor-style";
-  const LEGACY_EDITOR_STYLE_ATTR = "data-email-injected-style";
-  const PRODUCTION_STYLE_ID = "nocodemail-responsive-utilities";
-  const PRODUCTION_STYLE_ATTR = "data-ncm-production-style";
-  const PRODUCTION_RESPONSIVE_CSS = `
-@media only screen and (max-width: 480px) {
-  .mobile-align-left { text-align: left !important; }
-  .mobile-align-left table, .mobile-align-left img { margin-left: 0 !important; margin-right: auto !important; }
-  .mobile-align-center { text-align: center !important; }
-  .mobile-align-center table, .mobile-align-center img { margin-left: auto !important; margin-right: auto !important; }
-  .mobile-align-right { text-align: right !important; }
-  .mobile-align-right table, .mobile-align-right img { margin-left: auto !important; margin-right: 0 !important; }
-  .mobile-force-stack, .mobile-force-stack > [class*="mj-column"], .mobile-force-stack [class*="mj-column"] {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-  .mobile-force-row > [class*="mj-column"], .mobile-force-row [class*="mj-column"] {
-    display: inline-block !important;
-    vertical-align: middle !important;
-  }
-}`.trim();
 
   // History stack
   const [history, setHistory] = useState<string[]>([startHtml]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const historyRef = useRef<string[]>([startHtml]);
   const historyIndexRef = useRef<number>(0);
-  const skipNextDomRestoreRef = useRef<boolean>(false);
-  const iframeCleanupRef = useRef<(() => void) | null>(null);
-  const copyFeedbackTimerRef = useRef<number | null>(null);
-  const saveVersionRef = useRef(0);
-  const [saveError, setSaveError] = useState<string>("");
-  const [sectionCopyStatus, setSectionCopyStatus] = useState<"idle" | "copied" | "error">("idle");
-
-  const setHistoryState = useCallback((items: string[], index: number) => {
-    historyRef.current = items;
-    historyIndexRef.current = index;
-    setHistory(items);
-    setHistoryIndex(index);
-  }, []);
 
   useEffect(() => {
-    return () => {
-      iframeCleanupRef.current?.();
-      iframeCleanupRef.current = null;
-      if (copyFeedbackTimerRef.current) {
-        window.clearTimeout(copyFeedbackTimerRef.current);
-        copyFeedbackTimerRef.current = null;
-      }
-      if (inputDebounceTimerRef.current) {
-        clearTimeout(inputDebounceTimerRef.current);
-        inputDebounceTimerRef.current = null;
-      }
-    };
-  }, []);
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
 
   // Selected DOM element state
   const [selectedDomElement, setSelectedDomElement] = useState<HTMLElement | null>(null);
@@ -213,26 +170,22 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return `http://127.0.0.1:28941/pkg/${encodeURIComponent(normalizedFolder)}/`;
   }, [normalizedFolder]);
 
-  // Push new state to history without nested state updates or unbounded snapshots.
-  const pushHistory = useCallback((newHtml: string, markDirty = true): boolean => {
-    if (!newHtml) return false;
-    const currentIndex = historyIndexRef.current;
-    let updated = historyRef.current.slice(0, currentIndex + 1);
-    if (updated[updated.length - 1] === newHtml) {
-      if (markDirty) setIsSaved(false);
-      return false;
-    }
-
-    updated.push(newHtml);
-    if (updated.length > HISTORY_LIMIT) {
-      updated = updated.slice(updated.length - HISTORY_LIMIT);
-    }
-
-    const nextIdx = updated.length - 1;
-    setHistoryState(updated, nextIdx);
-    if (markDirty) setIsSaved(false);
-    return true;
-  }, [setHistoryState]);
+  // Push new state to history
+  const pushHistory = useCallback((newHtml: string) => {
+    if (!newHtml) return;
+    setHistory((prev) => {
+      const currentIndex = historyIndexRef.current;
+      const updated = prev.slice(0, currentIndex + 1);
+      if (updated[updated.length - 1] === newHtml) return prev;
+      updated.push(newHtml);
+      historyRef.current = updated;
+      const nextIdx = updated.length - 1;
+      historyIndexRef.current = nextIdx;
+      setHistoryIndex(nextIdx);
+      return updated;
+    });
+    setIsSaved(false);
+  }, []);
 
   // Floating text formatting toolbar state
   const [floatingToolbarPos, setFloatingToolbarPos] = useState<{ top: number; left: number } | null>(null);
@@ -285,68 +238,62 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     insertScopeRef.current = insertScope;
   }, [insertScope]);
 
-  // Resolve the complete enclosing email section without depending on the active inspector tab.
+  // Helper to find the true outermost section container when in Section mode
   const findSectionElement = useCallback((target: HTMLElement, doc: Document): HTMLElement => {
     if (!target || target === doc.body || target === doc.documentElement) return target;
 
-    const isEditorRoot = (el: HTMLElement | null) =>
-      !el || el === doc.body || el === doc.documentElement || el.classList?.contains("email-direct-dom-root");
+    // 1. If inside an explicit section wrapper
+    const wrapper = target.closest(".email-section-wrapper, [class*='mj-section']") as HTMLElement;
+    if (wrapper && wrapper !== doc.body) return wrapper;
 
-    const explicit = target.closest(".email-section-wrapper, .mj-section, [data-email-section], [data-section]") as HTMLElement | null;
-    if (explicit && !isEditorRoot(explicit)) return explicit;
-
-    let node: HTMLElement | null = target;
-    let bestWidthWrapper: HTMLElement | null = null;
-    while (node && !isEditorRoot(node)) {
-      const style = node.getAttribute("style") || "";
-      const widthAttr = node.getAttribute("width") || "";
-      const maxWidth = node.style.maxWidth || "";
-      const hasEmailWidth =
-        /(?:max-)?width\s*:\s*(?:[4-9]\d{2}|100%)px/i.test(style) ||
-        /(?:^|\D)(?:600|650|660|700)(?:px)?(?:\D|$)/.test(`${widthAttr} ${maxWidth}`);
-      const centeredBlock =
-        /margin\s*:\s*0(?:px)?\s+auto/i.test(style) ||
-        (node.style.marginLeft === "auto" && node.style.marginRight === "auto");
-
-      if ((node.tagName === "DIV" || node.tagName === "SECTION" || node.tagName === "TABLE") && (hasEmailWidth || centeredBlock)) {
-        bestWidthWrapper = node;
+    // 2. Check if target is inside an MJML section div (div with max-width: 600px/700px or margin:0px auto)
+    let check: HTMLElement | null = target;
+    while (check && check !== doc.body && check !== doc.documentElement) {
+      if (
+        check.tagName === "DIV" &&
+        (check.style.maxWidth || check.getAttribute("style")?.includes("max-width") || check.classList.contains("mj-section")) &&
+        (check.parentElement === doc.body || check.parentElement?.parentElement === doc.body || check.parentElement?.tagName === "BODY" || check.parentElement?.classList?.contains("mj-body"))
+      ) {
+        return check;
       }
-      node = node.parentElement;
-    }
-    if (bestWidthWrapper && !isEditorRoot(bestWidthWrapper)) return bestWidthWrapper;
-
-    const mjColumn = target.closest("[class*='mj-column']") as HTMLElement | null;
-    if (mjColumn) {
-      let rowHost: HTMLElement | null = mjColumn.parentElement;
-      while (rowHost && !isEditorRoot(rowHost)) {
-        if (rowHost.querySelectorAll(":scope > [class*='mj-column']").length > 1) {
-          const wrapper = rowHost.closest(".email-section-wrapper, [style*='max-width'], table[role='presentation']") as HTMLElement | null;
-          return wrapper && !isEditorRoot(wrapper) ? wrapper : rowHost;
-        }
-        rowHost = rowHost.parentElement;
-      }
+      check = check.parentElement;
     }
 
-    const td = target.closest("td") as HTMLTableCellElement | null;
-    if (td) {
-      const row = td.closest("tr") as HTMLTableRowElement | null;
-      if (row && row.parentElement) {
-        let table = row.closest("table") as HTMLTableElement | null;
-        while (table && !isEditorRoot(table)) {
-          const tableWidth = table.getAttribute("width") || table.style.width || table.style.maxWidth || "";
-          const isContainer = /^(?:100%|[4-9]\d{2}(?:px)?)$/.test(tableWidth.trim()) || table.getAttribute("role") === "presentation";
-          if (isContainer) return table;
-          table = table.parentElement?.closest("table") as HTMLTableElement | null;
-        }
-        return row;
+    // 3. Traditional table-based email:
+    let containerTable: HTMLElement | null = null;
+    check = target;
+    while (check && check !== doc.body) {
+      if (
+        check.tagName === "TABLE" &&
+        (check.getAttribute("width") === "700" || check.getAttribute("width") === "600" || check.style.maxWidth === "700px" || check.style.maxWidth === "600px" || check.classList.contains("email-container"))
+      ) {
+        containerTable = check;
+        break;
+      }
+      check = check.parentElement;
+    }
+
+    if (containerTable) {
+      check = target;
+      while (check && check.parentElement && check.parentElement !== containerTable && check.parentElement.parentElement !== containerTable) {
+        check = check.parentElement;
+      }
+      if (check && check !== containerTable) {
+        return check;
       }
     }
 
-    let fallback: HTMLElement = target;
-    while (fallback.parentElement && !isEditorRoot(fallback.parentElement) && fallback.parentElement.parentElement !== doc.body) {
-      fallback = fallback.parentElement;
+    // 4. General fallback: climb up until parent is doc.body or direct child of doc.body
+    let curr: HTMLElement = target;
+    while (
+      curr.parentElement &&
+      curr.parentElement !== doc.body &&
+      curr.parentElement.parentElement !== doc.body &&
+      curr.parentElement !== doc.documentElement
+    ) {
+      curr = curr.parentElement;
     }
-    return fallback;
+    return curr;
   }, []);
 
   // Handler for selecting an element in the email canvas
@@ -357,7 +304,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     let finalTarget = target;
     // In "New Section Row" mode, ALWAYS ensure we select the main outer section parent
-    if (insertScopeRef.current === "section" && inspectorTabRef.current === "components" && doc) {
+    if (insertScopeRef.current === "section" && doc) {
       finalTarget = findSectionElement(target, doc);
     }
 
@@ -402,191 +349,46 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return !section?.classList.contains("mobile-force-row");
   }, [selectedDomElement, findSectionElement, historyIndex]);
 
-  const escapeRegExp = useCallback((value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), []);
-
-  const reverseEditorAssetUrls = useCallback((html: string): string => {
-    if (!pkgPrefix) return html;
-    const escapedPrefix = escapeRegExp(pkgPrefix);
-    return html
-      .replace(new RegExp(`${escapedPrefix}assets/`, "g"), "assets/")
-      .replace(new RegExp(escapedPrefix, "g"), "");
-  }, [escapeRegExp, pkgPrefix]);
-
-  const removeEditorArtifactsFromClone = useCallback((root: ParentNode) => {
-    root.querySelectorAll(`[${EDITOR_STYLE_ATTR}], [${LEGACY_EDITOR_STYLE_ATTR}]`).forEach((el) => el.remove());
-    root.querySelectorAll("[contenteditable], [spellcheck]").forEach((el) => {
-      el.removeAttribute("contenteditable");
-      el.removeAttribute("spellcheck");
-    });
-    root.querySelectorAll(".editor-active-selected").forEach((el) => {
-      el.classList.remove("editor-active-selected");
-    });
-    root.querySelectorAll("[data-ncm-editor-title]").forEach((el) => {
-      const htmlEl = el as HTMLElement;
-      const original = htmlEl.getAttribute("data-ncm-original-title");
-      if (original !== null) {
-        htmlEl.setAttribute("title", original);
-      } else if (htmlEl.getAttribute("title") === "Double-click to choose image from disk") {
-        htmlEl.removeAttribute("title");
-      }
-      htmlEl.removeAttribute("data-ncm-editor-title");
-      htmlEl.removeAttribute("data-ncm-original-title");
-    });
-    root.querySelectorAll("[draggable='false']").forEach((el) => {
-      if (el.getAttribute("data-ncm-original-draggable") === null) {
-        el.removeAttribute("draggable");
-      } else {
-        el.setAttribute("draggable", el.getAttribute("data-ncm-original-draggable") || "false");
-        el.removeAttribute("data-ncm-original-draggable");
-      }
-    });
-  }, [EDITOR_STYLE_ATTR, LEGACY_EDITOR_STYLE_ATTR]);
-
-  const serializeCleanElement = useCallback((element: HTMLElement): string => {
-    const clone = element.cloneNode(true) as HTMLElement;
-    removeEditorArtifactsFromClone(clone);
-    return reverseEditorAssetUrls(clone.outerHTML);
-  }, [removeEditorArtifactsFromClone, reverseEditorAssetUrls]);
-
-  // Export clean HTML while preserving the document envelope and production responsive utilities.
+  // Export clean HTML (strips editor attributes and preserves original document envelope 1:1)
   const exportPristineHtml = useCallback((): string => {
     const iframe = emailIframeRef.current;
     const doc = iframe?.contentDocument;
     if (!doc) {
-      return historyRef.current[historyIndexRef.current] || startHtml;
+      return history[historyIndex] || startHtml;
     }
 
+    // Deep clone the document root in memory
     const clone = doc.documentElement.cloneNode(true) as HTMLElement;
-    removeEditorArtifactsFromClone(clone);
 
-    let cleanHtml = reverseEditorAssetUrls(clone.outerHTML);
+    // Remove any editor injected styles or indicators
+    clone.querySelectorAll("[data-email-injected-style]").forEach((el) => {
+      el.remove();
+    });
+
+    // Remove all editor interactive attributes
+    clone.querySelectorAll("[contenteditable]").forEach((el) => {
+      el.removeAttribute("contenteditable");
+      el.removeAttribute("spellcheck");
+    });
+    clone.querySelectorAll(".editor-active-selected").forEach((el) => {
+      el.classList.remove("editor-active-selected");
+    });
+
+    let cleanHtml = clone.outerHTML;
+    if (pkgPrefix) {
+      const escapedPrefix = pkgPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix + "assets/", "g"), "assets/");
+      cleanHtml = cleanHtml.replace(new RegExp(escapedPrefix, "g"), "");
+    }
+    cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\/assets\//g, "assets/");
+    cleanHtml = cleanHtml.replace(/http:\/\/127\.0\.0\.1:28941\/pkg\/[^/]+\//g, "");
+
     if (!cleanHtml.toLowerCase().includes("<!doctype html>")) {
       cleanHtml = `<!DOCTYPE html>\n${cleanHtml}`;
     }
 
     return cleanHtml;
-  }, [removeEditorArtifactsFromClone, reverseEditorAssetUrls, startHtml]);
-
-  const writeClipboardText = useCallback(async (text: string): Promise<boolean> => {
-    if (!text) return false;
-    try {
-      if (navigator.clipboard?.writeText && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // Fall through to execCommand fallback below.
-    }
-
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.left = "-9999px";
-    textarea.style.top = "0";
-    document.body.appendChild(textarea);
-
-    const previousActive = document.activeElement as HTMLElement | null;
-    textarea.focus();
-    textarea.select();
-
-    let ok = false;
-    try {
-      ok = document.execCommand("copy");
-    } catch {
-      ok = false;
-    } finally {
-      document.body.removeChild(textarea);
-      previousActive?.focus?.();
-    }
-    return ok;
-  }, []);
-
-  const getCopyableSection = useCallback((): HTMLElement | null => {
-    const doc = emailIframeRef.current?.contentDocument;
-    const selected = selectedDomElementRef.current || selectedDomElement;
-    if (!doc || !selected || !doc.body.contains(selected)) return null;
-    const section = findSectionElement(selected, doc);
-    if (!section || section === doc.body || section === doc.documentElement || !doc.body.contains(section)) return null;
-    return section;
-  }, [findSectionElement, selectedDomElement]);
-
-  const canCopySectionCode = !!getCopyableSection();
-
-  const handleCopySectionCode = useCallback(async (): Promise<boolean> => {
-    const section = getCopyableSection();
-    if (!section) {
-      setSectionCopyStatus("error");
-      return false;
-    }
-
-    const iframeWin = emailIframeRef.current?.contentWindow;
-    const selection = iframeWin?.getSelection();
-    const ranges: Range[] = [];
-    if (selection) {
-      for (let i = 0; i < selection.rangeCount; i += 1) {
-        ranges.push(selection.getRangeAt(i).cloneRange());
-      }
-    }
-
-    const ok = await writeClipboardText(serializeCleanElement(section));
-    setSectionCopyStatus(ok ? "copied" : "error");
-    if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
-    copyFeedbackTimerRef.current = window.setTimeout(() => setSectionCopyStatus("idle"), 1800);
-
-    if (selection && ranges.length > 0) {
-      try {
-        selection.removeAllRanges();
-        ranges.forEach((range) => selection.addRange(range));
-      } catch {
-        // Ignore disconnected ranges after user edits.
-      }
-    }
-    return ok;
-  }, [getCopyableSection, serializeCleanElement, writeClipboardText]);
-
-  const ensureProductionUtilityStyle = useCallback((doc: Document) => {
-    if (!doc.head || doc.getElementById(PRODUCTION_STYLE_ID)) return;
-    const style = doc.createElement("style");
-    style.id = PRODUCTION_STYLE_ID;
-    style.setAttribute(PRODUCTION_STYLE_ATTR, "true");
-    style.textContent = PRODUCTION_RESPONSIVE_CSS;
-    doc.head.appendChild(style);
-  }, [PRODUCTION_RESPONSIVE_CSS, PRODUCTION_STYLE_ATTR, PRODUCTION_STYLE_ID]);
-
-  const isPermittedUrlValue = useCallback((value: string): boolean => {
-    const raw = value.trim();
-    if (!raw) return true;
-    if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(raw)) return true;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return false;
-    return /^[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/.test(raw);
-  }, []);
-
-  const sanitizeDocumentForEditor = useCallback((doc: Document) => {
-    doc.querySelectorAll("script, iframe, object, embed, form, input, textarea, meta[http-equiv='refresh']").forEach((el) => el.remove());
-    doc.querySelectorAll("*").forEach((node) => {
-      const el = node as HTMLElement;
-      Array.from(el.attributes).forEach((attr) => {
-        const name = attr.name.toLowerCase();
-        const value = attr.value || "";
-        if (name.startsWith("on") || name === "srcdoc") {
-          el.removeAttribute(attr.name);
-          return;
-        }
-        if (["href", "src", "xlink:href", "background"].includes(name) && !isPermittedUrlValue(value)) {
-          el.removeAttribute(attr.name);
-        }
-      });
-    });
-  }, [isPermittedUrlValue]);
-
-  const sanitizeHtmlForEditor = useCallback((html: string): string => {
-    const parser = new DOMParser();
-    const parsed = parser.parseFromString(html, "text/html");
-    sanitizeDocumentForEditor(parsed);
-    const serialized = parsed.documentElement.outerHTML;
-    return html.trim().toLowerCase().startsWith("<!doctype") ? `<!DOCTYPE html>\n${serialized}` : serialized;
-  }, [sanitizeDocumentForEditor]);
+  }, [history, historyIndex, startHtml, pkgPrefix]);
 
   // Helper to enable contentEditable on text leaf elements in a DOM tree
   const makeTextElementsEditable = useCallback((root: HTMLElement) => {
@@ -595,9 +397,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     root.querySelectorAll("*").forEach((node) => {
       const el = node as HTMLElement;
       if (el.tagName.toLowerCase() === "img") {
-        if (el.getAttribute("draggable") !== null && el.getAttribute("data-ncm-original-draggable") === null) {
-          el.setAttribute("data-ncm-original-draggable", el.getAttribute("draggable") || "false");
-        }
         el.setAttribute("draggable", "false");
       }
       if (editableTags.includes(el.tagName.toLowerCase())) {
@@ -635,13 +434,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       return presetHtml.trim();
     }
   }, []);
-  const sanitizeFragmentHtml = useCallback((html: string): string => {
-    const doc = document.implementation.createHTMLDocument("NoCodeMail Fragment");
-    doc.body.innerHTML = html;
-    sanitizeDocumentForEditor(doc);
-    return doc.body.innerHTML;
-  }, [sanitizeDocumentForEditor]);
-
 
   // Handler for inserting preset component into the email DOM (supporting column-level and section-level scopes)
   const handleInsertPreset = useCallback((
@@ -668,43 +460,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         anchorEl = anchorEl.parentElement;
       }
 
-      const widgetHtml = sanitizeFragmentHtml(extractInnerWidget(presetHtml));
+      const widgetHtml = extractInnerWidget(presetHtml);
       const tempDiv = doc.createElement("div");
       tempDiv.innerHTML = widgetHtml;
-
-      if (targetPosition === "left" || targetPosition === "right") {
-        const existingCol = (selected.closest("[class*='mj-column']") as HTMLElement | null) || (selected.closest("td") as HTMLElement | null);
-        const rowParent = existingCol?.parentElement || null;
-        if (existingCol && rowParent && rowParent !== doc.body) {
-          const newCol = doc.createElement(existingCol.tagName.toLowerCase());
-          newCol.className = existingCol.className || "mj-column-per-50 mj-outlook-group-fix";
-          newCol.style.cssText = existingCol.getAttribute("style") || "font-size:0px;text-align:left;direction:ltr;display:inline-block;vertical-align:top;width:50%;";
-          newCol.innerHTML = widgetHtml;
-          makeTextElementsEditable(newCol);
-
-          const siblings = Array.from(rowParent.children).filter((child) => child.nodeType === 1) as HTMLElement[];
-          const totalCols = Math.min(4, siblings.length + 1);
-          const widthPct = `${Math.round((100 / totalCols) * 100000) / 100000}%`;
-          [...siblings, newCol].forEach((col) => {
-            col.style.width = widthPct;
-            if (/mj-column-per-\d/i.test(col.className)) {
-              col.className = col.className.replace(/mj-column-per-[\d-]+/g, `mj-column-per-${String(widthPct).replace(".", "-").replace("%", "")}`);
-            }
-          });
-
-          if (targetPosition === "left") {
-            rowParent.insertBefore(newCol, existingCol);
-          } else {
-            rowParent.insertBefore(newCol, existingCol.nextSibling);
-          }
-
-          handleSelectElement(newCol);
-          setIsSaved(false);
-          isInternalUpdateRef.current = true;
-          pushHistory(exportPristineHtml());
-          return;
-        }
-      }
 
       const insertedElements: HTMLElement[] = [];
       const parent = anchorEl.parentElement || doc.body;
@@ -734,11 +492,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         imgs.forEach((img) => {
           const imgEl = img as HTMLElement;
           imgEl.style.cursor = "pointer";
-          if (imgEl.getAttribute("title") !== null && imgEl.getAttribute("data-ncm-original-title") === null) {
-            imgEl.setAttribute("data-ncm-original-title", imgEl.getAttribute("title") || "");
-          }
           imgEl.setAttribute("title", "Double-click to choose image from disk");
-          imgEl.setAttribute("data-ncm-editor-title", "true");
           imgEl.addEventListener("dblclick", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -765,7 +519,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     // 2. SECTION-LEVEL INSERTION: Standalone full 700px section row
     const tempDiv = doc.createElement("div");
-    tempDiv.innerHTML = sanitizeFragmentHtml(presetHtml.trim());
+    tempDiv.innerHTML = presetHtml.trim();
     const newElement = tempDiv.firstElementChild as HTMLElement;
     if (!newElement) return;
 
@@ -1110,7 +864,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const inputDebounceTimerRef = useRef<any>(null);
 
   // Snapshot current DOM state into history cleanly
-  const commitCurrentDomToHistory = useCallback((skipRestore = true) => {
+  const commitCurrentDomToHistory = useCallback(() => {
     if (inputDebounceTimerRef.current) {
       clearTimeout(inputDebounceTimerRef.current);
       inputDebounceTimerRef.current = null;
@@ -1119,7 +873,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const currentIndex = historyIndexRef.current;
     const currentSnapshot = historyRef.current[currentIndex];
     if (currentClean && currentClean !== currentSnapshot) {
-      if (skipRestore) skipNextDomRestoreRef.current = true;
       pushHistory(currentClean);
     }
   }, [exportPristineHtml, pushHistory]);
@@ -1131,81 +884,48 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       const currentClean = exportPristineHtml();
       const currentIndex = historyIndexRef.current;
       if (currentClean && currentClean !== historyRef.current[currentIndex]) {
-        pushHistory(currentClean);
+        // User typed something and immediately hit undo: commit current dirty state first then step back to previous state
+        const updated = historyRef.current.slice(0, currentIndex + 1);
+        updated.push(currentClean);
+        historyRef.current = updated;
+        setHistory(updated);
+        setHistoryIndex(currentIndex);
+        historyIndexRef.current = currentIndex;
+        setIsSaved(false);
+        return;
       }
     }
 
     const currentIndex = historyIndexRef.current;
     if (currentIndex > 0) {
       const targetIdx = currentIndex - 1;
-      setHistoryState(historyRef.current, targetIdx);
+      historyIndexRef.current = targetIdx;
+      setHistoryIndex(targetIdx);
       setIsSaved(false);
     }
-  }, [exportPristineHtml, pushHistory, setHistoryState]);
+  }, [exportPristineHtml]);
 
   const handleRedo = useCallback(() => {
-    if (inputDebounceTimerRef.current) {
-      clearTimeout(inputDebounceTimerRef.current);
-      inputDebounceTimerRef.current = null;
-    }
-    const currentClean = exportPristineHtml();
     const currentIndex = historyIndexRef.current;
-    if (currentClean && currentClean !== historyRef.current[currentIndex]) {
-      // Redo should not overwrite unsaved DOM edits; commit them as a new branch.
-      pushHistory(currentClean);
-      return;
-    }
-
     if (currentIndex < historyRef.current.length - 1) {
       const targetIdx = currentIndex + 1;
-      setHistoryState(historyRef.current, targetIdx);
+      historyIndexRef.current = targetIdx;
+      setHistoryIndex(targetIdx);
       setIsSaved(false);
     }
-  }, [exportPristineHtml, pushHistory, setHistoryState]);
-
-  const sanitizeFileName = useCallback((name: string) => {
-    const base = (name || "campaign.html").split(/[/\\]/).pop() || "campaign.html";
-    const cleaned = base.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim();
-    return cleaned.toLowerCase().endsWith(".html") || cleaned.toLowerCase().endsWith(".htm")
-      ? cleaned
-      : `${cleaned || "campaign"}.html`;
   }, []);
 
-  const resolveSaveTarget = useCallback(() => {
-    const cleanName = sanitizeFileName(fileName);
-    if (initialFilePath && rawFolder) {
-      const sep = initialFilePath.includes("\\") ? "\\" : "/";
-      return `${rawFolder}${sep}${cleanName}`;
-    }
-    return initialFilePath || cleanName;
-  }, [fileName, initialFilePath, rawFolder, sanitizeFileName]);
-
   const handleSave = useCallback(async () => {
-    const saveVersion = ++saveVersionRef.current;
     try {
       commitCurrentDomToHistory();
       const fullHtml = exportPristineHtml();
-      const saveTarget = resolveSaveTarget();
-      const ok = await nativeIPC.saveFile(saveTarget, fullHtml);
-      if (!ok) {
-        if (saveVersion === saveVersionRef.current) {
-          setSaveError("Save failed. Your changes remain unsaved.");
-          setIsSaved(false);
-        }
-        return;
-      }
-      if (saveVersion === saveVersionRef.current && fullHtml === exportPristineHtml()) {
-        setSaveError("");
-        setIsSaved(true);
-      }
+      const saveTarget = initialFilePath || fileName;
+      await nativeIPC.saveFile(saveTarget, fullHtml);
+      setIsSaved(true);
     } catch (e) {
       console.error("Save error:", e);
-      if (saveVersion === saveVersionRef.current) {
-        setSaveError("Save failed. Your changes remain unsaved.");
-        setIsSaved(false);
-      }
     }
-  }, [commitCurrentDomToHistory, exportPristineHtml, resolveSaveTarget]);
+  }, [commitCurrentDomToHistory, exportPristineHtml, initialFilePath, fileName]);
 
   // Unified keyboard shortcut handler (Ctrl+S, Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
   const handleKeyDownShared = useCallback((e: KeyboardEvent) => {
@@ -1227,10 +947,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
   }, [handleSave, handleUndo, handleRedo]);
 
-  const attachIframeListeners = useCallback((doc: Document, win: Window | null): (() => void) => {
-    if (!doc || !doc.body) return () => {};
-    iframeCleanupRef.current?.();
-    iframeCleanupRef.current = null;
+  const attachIframeListeners = useCallback((doc: Document, win: Window | null) => {
+    if (!doc || !doc.body) return;
 
     const handleDocPointerDown = (e: MouseEvent) => {
       let target = e.target as HTMLElement | null;
@@ -1292,7 +1010,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const handleDocDblClick = async (e: MouseEvent) => {
       let target = e.target as HTMLElement | null;
       if (!target) return;
-      const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : null;
+      const imgEl = target.tagName.toLowerCase() === "img" ? (target as HTMLImageElement) : (target.querySelector("img") as HTMLImageElement | null);
       if (!imgEl) return;
 
       e.stopPropagation();
@@ -1309,11 +1027,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           const assetsDir = pkgDir ? `${pkgDir}\\assets` : "assets";
 
           const copyRes = await nativeIPC.copyAsset(chosenPath, assetsDir);
-          if (!copyRes.success || !copyRes.new_relative_path) {
-            throw new Error(copyRes.error || "Failed to copy image into assets");
-          }
-          const finalRelPath = copyRes.new_relative_path;
-          const liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : finalRelPath;
+          let finalRelPath = copyRes.new_relative_path || `assets/${chosenPath.split(/[/\\]/).pop()}`;
+          let liveSrc = pkgPrefix ? `${pkgPrefix}${finalRelPath}` : `/${finalRelPath}`;
 
           imgEl.src = liveSrc;
           imgEl.setAttribute("src", liveSrc);
@@ -1397,35 +1112,16 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       setFloatingToolbarPos({ top: topPos, left: leftPos });
     };
 
-    const handleDocClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("a")) {
-        e.preventDefault();
-      }
-    };
-
     doc.addEventListener("pointerdown", handleDocPointerDown, true);
-    doc.addEventListener("click", handleDocClick, true);
     doc.addEventListener("dblclick", handleDocDblClick, true);
     doc.addEventListener("input", handleDocInput);
     doc.addEventListener("blur", handleDocBlur, true);
     doc.addEventListener("selectionchange", handleDocSelectionChange);
     doc.addEventListener("keydown", handleKeyDownShared, true);
-
-    const cleanup = () => {
-      doc.removeEventListener("pointerdown", handleDocPointerDown, true);
-      doc.removeEventListener("click", handleDocClick, true);
-      doc.removeEventListener("dblclick", handleDocDblClick, true);
-      doc.removeEventListener("input", handleDocInput);
-      doc.removeEventListener("blur", handleDocBlur, true);
-      doc.removeEventListener("selectionchange", handleDocSelectionChange);
-      doc.removeEventListener("keydown", handleKeyDownShared, true);
-    };
-    iframeCleanupRef.current = cleanup;
-    return cleanup;
+    win?.addEventListener("keydown", handleKeyDownShared, true);
   }, [findSectionElement, handleSelectElement, handleKeyDownShared, commitCurrentDomToHistory, exportPristineHtml, pushHistory, normalizedFolder, pkgPrefix]);
 
-  // 1. Persistent keyboard listener on the host window plus iframe load hookup.
+  // 1. Persistent event listeners on main window & iframe load
   useEffect(() => {
     const iframe = emailIframeRef.current;
     if (!iframe) return;
@@ -1441,16 +1137,13 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return () => {
       iframe.removeEventListener("load", onLoad);
       window.removeEventListener("keydown", handleKeyDownShared, true);
-      iframeCleanupRef.current?.();
-      iframeCleanupRef.current = null;
     };
   }, [attachIframeListeners, handleKeyDownShared]);
 
   // 2. Mount document into direct DOM container on load or Undo/Redo
   useEffect(() => {
-    if (isInternalUpdateRef.current || skipNextDomRestoreRef.current) {
+    if (isInternalUpdateRef.current) {
       isInternalUpdateRef.current = false;
-      skipNextDomRestoreRef.current = false;
       return;
     }
 
@@ -1509,21 +1202,14 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       return pkgPrefix ? `url('${pkgPrefix}assets/${fname}')` : `url('/assets/${fname}')`;
     });
 
-    preparedHtml = sanitizeHtmlForEditor(preparedHtml);
-
-    // Write sanitized email HTML into the sandboxed iframe
-    iframeCleanupRef.current?.();
-    iframeCleanupRef.current = null;
+    // Write pristine HTML into iframe
     doc.open();
     doc.write(preparedHtml);
     doc.close();
-    sanitizeDocumentForEditor(doc);
-    ensureProductionUtilityStyle(doc);
 
-    // Inject temporary editor-only hover/selection styles separately from retained production utilities.
-    doc.querySelectorAll(`[${EDITOR_STYLE_ATTR}], [${LEGACY_EDITOR_STYLE_ATTR}]`).forEach((el) => el.remove());
+    // Inject editor outline & hover styles directly into iframe head + responsive editor utility classes
     const editorStyle = doc.createElement("style");
-    editorStyle.setAttribute(EDITOR_STYLE_ATTR, "true");
+    editorStyle.setAttribute("data-email-injected-style", "true");
     editorStyle.textContent = `
       html, body {
         overflow-x: hidden !important;
@@ -1549,6 +1235,37 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       img.editor-active-selected {
         cursor: default !important;
       }
+
+      /* Responsive Mobile Alignment Overrides (Preserves AI-analyzed spacing & padding without affecting Desktop) */
+      @media only screen and (max-width: 480px) {
+        .mobile-align-left table, .mobile-align-left img { margin: 0 auto 0 0 !important; }
+        .mobile-align-left { text-align: left !important; }
+
+        .mobile-align-center table, .mobile-align-center img { margin: 0 auto !important; }
+        .mobile-align-center { text-align: center !important; }
+
+        .mobile-align-right table, .mobile-align-right img { margin: 0 0 0 auto !important; }
+        .mobile-align-right { text-align: right !important; }
+
+        /* Responsive Stacking & 1-Row Layout Controls */
+        .mobile-force-stack,
+        .mobile-force-stack > [class*="mj-column"],
+        .mobile-force-stack [class*="mj-column"] {
+          display: block !important;
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+
+        .mobile-force-row {
+          display: table !important;
+          width: 100% !important;
+        }
+        .mobile-force-row > [class*="mj-column"],
+        .mobile-force-row [class*="mj-column"] {
+          display: inline-block !important;
+          vertical-align: middle !important;
+        }
+      }
     `;
     doc.head?.appendChild(editorStyle);
 
@@ -1560,18 +1277,15 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       }
     };
     updateIframeHeight();
-    const heightTimer = window.setTimeout(updateIframeHeight, 150);
+    setTimeout(updateIframeHeight, 150);
 
-    // ResizeObserver watches content changes and updates iframe height dynamically.
-    let resizeObserver: ResizeObserver | null = null;
+    // ResizeObserver watches content changes and updates iframe height dynamically
     try {
-      resizeObserver = new ResizeObserver(() => {
+      const ro = new ResizeObserver(() => {
         updateIframeHeight();
       });
-      if (doc.body) resizeObserver.observe(doc.body);
-    } catch {
-      resizeObserver = null;
-    }
+      if (doc.body) ro.observe(doc.body);
+    } catch {}
 
     setIframeDomRoot(doc.body);
 
@@ -1616,69 +1330,50 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     // Attach all interactive & keyboard listeners to the freshly rendered iframe document
     attachIframeListeners(doc, iframe.contentWindow);
-
-    return () => {
-      window.clearTimeout(heightTimer);
-      resizeObserver?.disconnect();
-    };
-  }, [historyIndex, startHtml, pkgPrefix, attachIframeListeners, sanitizeHtmlForEditor, sanitizeDocumentForEditor, ensureProductionUtilityStyle, EDITOR_STYLE_ATTR, LEGACY_EDITOR_STYLE_ATTR]);
+  }, [historyIndex, startHtml, pkgPrefix, attachIframeListeners]);
 
   // Style update handlers
-  const normalizeCssValue = (property: string, value: string) => {
+  const handleUpdateStyle = (property: string, value: string) => {
     let cleanVal = value.trim();
-    const dimensionProps = new Set([
+
+    // Auto-append px for pure numeric dimensions (e.g. "20" -> "20px")
+    const dimensionProps = [
       "font-size", "width", "height", "max-width", "min-width", "max-height", "min-height",
       "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
       "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
       "border-width", "border-radius", "top", "left", "right", "bottom", "letter-spacing"
-    ]);
-    if (dimensionProps.has(property.toLowerCase()) && /^[+-]?\d+(?:\.\d+)?$/.test(cleanVal)) {
+    ];
+    if (dimensionProps.includes(property.toLowerCase()) && /^[+-]?\d+(\.\d+)?$/.test(cleanVal)) {
       cleanVal = `${cleanVal}px`;
     }
-    return cleanVal;
-  };
 
-  const isCssDeclarationValid = (property: string, value: string) => {
-    if (!property.trim()) return false;
-    const doc = emailIframeRef.current?.contentDocument || document;
-    const probe = doc.createElement("div");
-    probe.style.setProperty(property, value);
-    return probe.style.length > 0;
-  };
-
-  const syncEmailAttributesForStyle = (el: HTMLElement, property: string, value: string, remove = false) => {
-    const propLower = property.toLowerCase();
-    if (remove) {
-      if (propLower === "width") el.removeAttribute("width");
-      if (propLower === "height") el.removeAttribute("height");
-      if (propLower === "background-color" || propLower === "background") el.removeAttribute("bgcolor");
-      if (propLower === "text-align") el.removeAttribute("align");
-      return;
-    }
-
-    if (propLower === "width" && /^-?\d+(?:\.\d+)?px$/.test(value)) {
-      el.setAttribute("width", value.replace(/px$/i, ""));
-    } else if (propLower === "height" && /^-?\d+(?:\.\d+)?px$/.test(value)) {
-      el.setAttribute("height", value.replace(/px$/i, ""));
-    } else if (propLower === "background-color" || propLower === "background") {
-      el.setAttribute("bgcolor", value);
-    } else if (propLower === "text-align" && /^(left|center|right|justify)$/i.test(value)) {
-      el.setAttribute("align", value);
-    }
-  };
-
-  const handleUpdateStyle = (property: string, value: string) => {
-    const prop = property.trim();
-    const cleanVal = normalizeCssValue(prop, value);
-    if (!isCssDeclarationValid(prop, cleanVal)) return;
-
-    const updated = { ...inlineStyles, [prop]: cleanVal };
+    const updated = { ...inlineStyles, [property]: cleanVal };
     setInlineStyles(updated);
 
     const el = selectedDomElementRef.current || selectedDomElement;
     if (el) {
-      el.style.setProperty(prop, cleanVal, "important");
-      syncEmailAttributesForStyle(el, prop, cleanVal);
+      // 1. Direct style property assignment
+      el.style.setProperty(property, cleanVal, "important");
+      const camelProp = property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      (el.style as any)[camelProp] = cleanVal;
+
+      // 2. Direct attribute sync for email engines
+      const propLower = property.toLowerCase();
+      if (propLower === "width") {
+        el.setAttribute("width", cleanVal.replace(/px/g, ""));
+        el.style.maxWidth = cleanVal;
+      } else if (propLower === "height") {
+        el.setAttribute("height", cleanVal.replace(/px/g, ""));
+      } else if (propLower === "background-color" || propLower === "background") {
+        el.setAttribute("bgcolor", cleanVal);
+        el.style.backgroundColor = cleanVal;
+      } else if (propLower === "text-align") {
+        el.setAttribute("align", cleanVal);
+      } else if (propLower === "color") {
+        el.style.color = cleanVal;
+      } else if (propLower === "font-size") {
+        el.style.fontSize = cleanVal;
+      }
 
       setIsSaved(false);
       isInternalUpdateRef.current = true;
@@ -1687,15 +1382,25 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   };
 
   const handleRenameStyle = (oldProperty: string, newProperty: string, value: string) => {
-    const nextProp = newProperty.trim();
-    if (!nextProp) return;
-    const cleanVal = normalizeCssValue(nextProp, value);
-    if (!isCssDeclarationValid(nextProp, cleanVal)) return;
+    let cleanVal = value.trim();
 
+    const dimensionProps = [
+      "font-size", "width", "height", "max-width", "min-width", "max-height", "min-height",
+      "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+      "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+      "border-width", "border-radius", "top", "left", "right", "bottom", "letter-spacing"
+    ];
+    if (dimensionProps.includes(newProperty.toLowerCase()) && /^[+-]?\d+(\.\d+)?$/.test(cleanVal)) {
+      cleanVal = `${cleanVal}px`;
+    }
+
+    // Preserve exact in-place key order
     const updated: Record<string, string> = {};
     Object.keys(inlineStyles).forEach((k) => {
       if (k === oldProperty) {
-        updated[nextProp] = cleanVal;
+        if (newProperty.trim()) {
+          updated[newProperty.trim()] = cleanVal;
+        }
       } else {
         updated[k] = inlineStyles[k];
       }
@@ -1704,11 +1409,10 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     const el = selectedDomElementRef.current || selectedDomElement;
     if (el) {
-      const priority = el.style.getPropertyPriority(oldProperty) || "important";
       el.style.removeProperty(oldProperty);
-      el.style.setProperty(nextProp, cleanVal, priority);
-      syncEmailAttributesForStyle(el, oldProperty, "", true);
-      syncEmailAttributesForStyle(el, nextProp, cleanVal);
+      if (newProperty.trim()) {
+        el.style.setProperty(newProperty.trim(), cleanVal, "important");
+      }
       setIsSaved(false);
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
@@ -1723,7 +1427,19 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const el = selectedDomElementRef.current || selectedDomElement;
     if (el) {
       el.style.removeProperty(property);
-      syncEmailAttributesForStyle(el, property, "", true);
+      const camelProp = property.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      (el.style as any)[camelProp] = "";
+
+      const propLower = property.toLowerCase();
+      if (propLower === "width") {
+        el.removeAttribute("width");
+      } else if (propLower === "height") {
+        el.removeAttribute("height");
+      } else if (propLower === "background-color" || propLower === "background") {
+        el.removeAttribute("bgcolor");
+      } else if (propLower === "text-align") {
+        el.removeAttribute("align");
+      }
       setIsSaved(false);
       isInternalUpdateRef.current = true;
       pushHistory(exportPristineHtml());
@@ -1731,7 +1447,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   };
 
   const handleReplaceImage = async (imgElement: HTMLElement) => {
-    if (!imgElement || imgElement.tagName.toLowerCase() !== "img") return;
+    if (!imgElement) return;
     try {
       const res = await nativeIPC.chooseImage();
       if (res && res.success && res.path) {
@@ -1739,10 +1455,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         if (fileFolder) {
           const assetsDir = `${fileFolder}/assets`;
           const copyRes = await nativeIPC.copyAsset(res.path, assetsDir);
-          if (!copyRes.success || !copyRes.new_relative_path) {
-            throw new Error(copyRes.error || "Failed to copy image into assets");
+          if (copyRes && copyRes.success && copyRes.new_relative_path) {
+            finalSrc = pkgPrefix ? `${pkgPrefix}${copyRes.new_relative_path}` : copyRes.new_relative_path;
           }
-          finalSrc = pkgPrefix ? `${pkgPrefix}${copyRes.new_relative_path}` : copyRes.new_relative_path;
         }
         imgElement.setAttribute("src", finalSrc);
         setIsSaved(false);
@@ -1751,47 +1466,35 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       }
     } catch (err) {
       console.error("Error replacing image:", err);
-      setSaveError("Image replacement failed.");
     }
   };
 
   const handleUpdateAttribute = (el: HTMLElement, attr: string, value: string) => {
     if (!el) return;
-    const cleanAttr = attr.trim();
-    if (!cleanAttr || cleanAttr.toLowerCase().startsWith("on") || cleanAttr.toLowerCase() === "srcdoc") return;
-    if (["href", "src", "xlink:href", "background"].includes(cleanAttr.toLowerCase()) && !isPermittedUrlValue(value)) {
-      setSaveError("Blocked an unsafe URL attribute.");
-      return;
-    }
-    el.setAttribute(cleanAttr, value);
+    el.setAttribute(attr, value);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
   };
 
   // Restore selection range when user clicks toolbar buttons
-  const restoreRange = useCallback((): boolean => {
+  const restoreRange = useCallback(() => {
     const iframe = emailIframeRef.current;
-    const doc = iframe?.contentDocument;
-    const win = iframe?.contentWindow;
-    if (!doc || !win || !savedRange) return false;
-    try {
-      if (!doc.body.contains(savedRange.commonAncestorContainer)) return false;
+    const win = iframe?.contentWindow || window;
+    if (savedRange) {
       const selection = win.getSelection();
-      if (!selection) return false;
-      selection.removeAllRanges();
-      selection.addRange(savedRange);
-      return true;
-    } catch {
-      return false;
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+      }
     }
   }, [savedRange]);
 
   // Execute standard text formatting commands and pipe cleanly into undo/redo history
   const handleFormatText = (command: "bold" | "italic" | "underline" | "superscript" | "subscript") => {
-    if (!restoreRange()) return;
-    const doc = emailIframeRef.current?.contentDocument;
-    doc?.execCommand(command, false);
+    restoreRange();
+    const doc = emailIframeRef.current?.contentDocument || document;
+    doc.execCommand(command, false);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
@@ -1799,41 +1502,31 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
   // Apply text color and pipe into history
   const handleApplyTextColor = (color: string) => {
-    if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) return;
     setSelectedTextColor(color);
-    if (!restoreRange()) return;
-    const doc = emailIframeRef.current?.contentDocument;
-    doc?.execCommand("foreColor", false, color);
+    restoreRange();
+    const doc = emailIframeRef.current?.contentDocument || document;
+    doc.execCommand("foreColor", false, color);
     setShowColorPopover(false);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
   };
 
-  const normalizeLinkUrl = useCallback((rawValue: string): string | null => {
-    const raw = rawValue.trim();
-    if (!raw) return null;
-    if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(raw)) return raw;
-    if (/^[^\s:@]+@[^\s:@]+\.[^\s:@]+$/.test(raw)) return `mailto:${raw}`;
-    if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:[/?#].*)?$/.test(raw)) return `https://${raw}`;
-    return isPermittedUrlValue(raw) ? raw : null;
-  }, [isPermittedUrlValue]);
-
   // Apply or update link with href and target, pipe into history
   const handleApplyLink = () => {
-    const normalizedUrl = normalizeLinkUrl(linkHref);
-    if (!normalizedUrl) {
-      setShowLinkPopover(false);
-      return;
+    restoreRange();
+    let url = linkHref.trim();
+    if (!url) return;
+    if (!/^https?:\/\//i.test(url) && !url.startsWith("mailto:") && !url.startsWith("#")) {
+      url = `https://${url}`;
     }
 
     const isImage = selectedDomElement?.tagName.toLowerCase() === "img";
     const doc = emailIframeRef.current?.contentDocument;
-    const win = emailIframeRef.current?.contentWindow;
 
-    if (isImage && selectedDomElement && doc) {
-      if (activeLinkNode && doc.body.contains(activeLinkNode)) {
-        activeLinkNode.setAttribute("href", normalizedUrl);
+    if (isImage && selectedDomElement) {
+      if (activeLinkNode) {
+        activeLinkNode.setAttribute("href", url);
         if (linkTargetBlank) {
           activeLinkNode.setAttribute("target", "_blank");
           activeLinkNode.setAttribute("rel", "noopener noreferrer");
@@ -1841,9 +1534,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           activeLinkNode.removeAttribute("target");
           activeLinkNode.removeAttribute("rel");
         }
-      } else {
+      } else if (doc) {
         const a = doc.createElement("a");
-        a.setAttribute("href", normalizedUrl);
+        a.setAttribute("href", url);
         if (linkTargetBlank) {
           a.setAttribute("target", "_blank");
           a.setAttribute("rel", "noopener noreferrer");
@@ -1857,8 +1550,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           setActiveLinkNode(a);
         }
       }
-    } else if (activeLinkNode && doc?.body.contains(activeLinkNode)) {
-      activeLinkNode.setAttribute("href", normalizedUrl);
+    } else if (activeLinkNode) {
+      activeLinkNode.setAttribute("href", url);
       if (linkTargetBlank) {
         activeLinkNode.setAttribute("target", "_blank");
         activeLinkNode.setAttribute("rel", "noopener noreferrer");
@@ -1866,15 +1559,15 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         activeLinkNode.removeAttribute("target");
         activeLinkNode.removeAttribute("rel");
       }
-    } else if (doc && win && restoreRange()) {
-      doc.execCommand("createLink", false, normalizedUrl);
-      const selection = win.getSelection();
-      if (selection?.anchorNode) {
+    } else {
+      document.execCommand("createLink", false, url);
+      const selection = window.getSelection();
+      if (selection && selection.anchorNode) {
         let parentEl = selection.anchorNode.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : (selection.anchorNode as HTMLElement);
-        while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== doc.body) {
+        while (parentEl && parentEl.tagName.toLowerCase() !== "a" && parentEl !== doc?.body) {
           parentEl = parentEl.parentElement;
         }
-        if (parentEl?.tagName.toLowerCase() === "a") {
+        if (parentEl && parentEl.tagName.toLowerCase() === "a") {
           if (linkTargetBlank) {
             parentEl.setAttribute("target", "_blank");
             parentEl.setAttribute("rel", "noopener noreferrer");
@@ -1884,7 +1577,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
 
     setShowLinkPopover(false);
-    setSavedRange(null);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
@@ -1892,19 +1584,18 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
   // Remove link and pipe into history
   const handleRemoveLink = () => {
-    const doc = emailIframeRef.current?.contentDocument;
-    if (activeLinkNode && doc?.body.contains(activeLinkNode)) {
+    restoreRange();
+    if (activeLinkNode) {
       const parent = activeLinkNode.parentNode;
       while (activeLinkNode.firstChild) {
         parent?.insertBefore(activeLinkNode.firstChild, activeLinkNode);
       }
       parent?.removeChild(activeLinkNode);
-    } else if (doc && restoreRange()) {
-      doc.execCommand("unlink", false);
+    } else {
+      document.execCommand("unlink", false);
     }
     setActiveLinkNode(null);
     setShowLinkPopover(false);
-    setSavedRange(null);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
@@ -1916,12 +1607,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   };
 
   const handleApplyCodeModal = () => {
-    const sanitized = sanitizeHtmlForEditor(rawCodeText);
-    if (sanitized.trim()) {
-      setSavedRange(null);
-      setShowLinkPopover(false);
-      setShowColorPopover(false);
-      pushHistory(sanitized);
+    if (rawCodeText.trim()) {
+      pushHistory(rawCodeText);
       setShowCodeModal(false);
     }
   };
@@ -1947,26 +1634,19 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     setShowBrowserMenu(false);
     const pristine = exportPristineHtml();
 
-    const previewTarget = rawFolder
-      ? `${rawFolder}${initialFilePath?.includes("/") ? "/" : "\\"}__nocodemail_preview.html`
-      : "__nocodemail_preview.html";
-
+    let saveTarget = initialFilePath;
+    if (!saveTarget) {
+      const pkgDir = localStorage.getItem("nocodemail_last_pkg_dir");
+      saveTarget = pkgDir ? `${pkgDir}\\preview_browser.html` : "preview_browser.html";
+    }
     try {
-      const saved = await nativeIPC.saveFile(previewTarget, pristine);
-      if (!saved) {
-        setSaveError("Could not create a browser preview file.");
-        return;
-      }
-      const opened = await nativeIPC.openInBrowser({
-        path: previewTarget,
+      await nativeIPC.saveFile(saveTarget, pristine);
+      await nativeIPC.openInBrowser({
+        path: saveTarget,
         browser_path: browser ? browser.path : undefined,
       });
-      if (!opened) {
-        setSaveError("Could not open the browser preview.");
-      }
     } catch (err) {
       console.error("Failed to open browser:", err);
-      setSaveError("Could not open the browser preview.");
     }
   };
 
@@ -2326,12 +2006,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             <span>{isSaved ? "Saved" : "Save*"}</span>
           </button>
 
-          {saveError && (
-            <span role="status" style={{ fontSize: "10.5px", fontWeight: 700, color: "#dc2626", maxWidth: "190px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
-              {saveError}
-            </span>
-          )}
-
           <div style={{ width: "1px", height: "18px", background: "#e2e8f0" }}></div>
 
           {/* Open in Browser Multi-Browser Dropdown */}
@@ -2538,8 +2212,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             <iframe
               ref={emailIframeRef}
               title="Email Canvas"
-              sandbox="allow-same-origin"
-              referrerPolicy="no-referrer"
               scrolling="no"
               style={{
                 width: "100%",
@@ -2961,7 +2633,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const btnPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "button-cta");
+                    const btnPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "button");
                     if (btnPreset) {
                       handleInsertPreset(btnPreset.generateHtml(), "bottom", "column");
                     }
@@ -2988,7 +2660,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const imgPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "hero-image");
+                    const imgPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "image");
                     if (imgPreset) {
                       handleInsertPreset(imgPreset.generateHtml(), "bottom", "column");
                     }
@@ -3156,9 +2828,6 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             onInsertPreset={handleInsertPreset}
             onReplaceImage={handleReplaceImage}
             onUpdateAttribute={handleUpdateAttribute}
-            canCopySectionCode={canCopySectionCode}
-            copySectionStatus={sectionCopyStatus}
-            onCopySectionCode={handleCopySectionCode}
             domRoot={iframeDomRoot || emailIframeRef.current?.contentDocument?.body || null}
           />
         </aside>

@@ -21,26 +21,8 @@ export interface ComponentPreset {
   generateHtml: (assetsPrefix?: string) => string;
 }
 
-const clampSvgDimension = (value: number | undefined, fallback: number): number => {
-  if (!Number.isFinite(value) || value === undefined) return fallback;
-  return Math.max(1, Math.min(2400, Math.round(value)));
-};
-
-const escapeSvgText = (value: string): string =>
-  String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-const normalizeSvgColor = (value: string, fallback: string): string => {
-  const raw = String(value || "").trim();
-  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw) ? raw : fallback;
-};
-
 /**
- * Generate self-contained, offline-safe SVG placeholder data URIs.
- * Values are normalized before interpolation so user-provided labels cannot
- * break the SVG and non-finite dimensions never produce invalid markup.
+ * Generate self-contained, offline-safe SVG placeholder data URIs
  */
 export const createSvgPlaceholder = (
   width = 400,
@@ -49,21 +31,13 @@ export const createSvgPlaceholder = (
   bgColor = "#e2e8f0",
   textColor = "#64748b"
 ): string => {
-  const safeWidth = clampSvgDimension(width, 400);
-  const safeHeight = clampSvgDimension(height, 240);
-  const safeLabel = escapeSvgText(label);
-  const safeBg = normalizeSvgColor(bgColor, "#e2e8f0");
-  const safeText = normalizeSvgColor(textColor, "#64748b");
-  const midX = safeWidth / 2;
-  const midY = safeHeight / 2;
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${safeWidth}" height="${safeHeight}" viewBox="0 0 ${safeWidth} ${safeHeight}">
-  <rect width="100%" height="100%" fill="${safeBg}" rx="6"/>
-  <g fill="${safeText}" opacity="0.7">
-    <circle cx="${midX - 14}" cy="${midY - 10}" r="6" />
-    <path d="M${midX - 24} ${midY + 12}l14-16 10 12 8-8 16 12h-48z" />
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect width="100%" height="100%" fill="${bgColor}" rx="6"/>
+  <g fill="${textColor}" opacity="0.7">
+    <circle cx="${width / 2 - 14}" cy="${height / 2 - 10}" r="6" />
+    <path d="M${width / 2 - 24} ${height / 2 + 12}l14-16 10 12 8-8 16 12h-48z" />
   </g>
-  <text x="50%" y="${midY + 28}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600" fill="${safeText}" text-anchor="middle">${safeLabel}</text>
+  <text x="50%" y="${height / 2 + 28}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600" fill="${textColor}" text-anchor="middle">${label}</text>
 </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 };
@@ -135,7 +109,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                       <tbody>
                         <tr>
                           <td style="width:660px;">
-                            <img alt="Hero Banner" src="${createSvgPlaceholder(660, 260, "Hero Banner (Click to Replace)", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="660" />
+                            <img alt="Hero Banner" src="${createSvgPlaceholder(660, 260, "Hero Banner (Click to Replace)", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="660" height="auto" />
                           </td>
                         </tr>
                       </tbody>
@@ -179,7 +153,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                       <tbody>
                         <tr>
                           <td align="center" bgcolor="#4f46e5" role="presentation" style="border:none;border-radius:6px;cursor:auto;padding:12px 28px;background:#4f46e5;" valign="middle">
-                            <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank" rel="noopener noreferrer">
+                            <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank">
                               Learn More &rarr;
                             </a>
                           </td>
@@ -257,7 +231,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                       <tbody>
                         <tr>
                           <td style="width:230px;">
-                            <img alt="Media" src="${createSvgPlaceholder(260, 260, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:230px;font-size:13px;" width="230" />
+                            <img alt="Media" src="${createSvgPlaceholder(260, 260, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:230px;font-size:13px;" width="230" height="auto" />
                           </td>
                         </tr>
                       </tbody>
@@ -283,7 +257,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                       <tbody>
                         <tr>
                           <td align="center" bgcolor="#4f46e5" role="presentation" style="border:none;border-radius:6px;cursor:auto;padding:10px 24px;background:#4f46e5;" valign="middle">
-                            <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:13.5px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank" rel="noopener noreferrer">
+                            <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:13.5px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank">
                               Learn More &rarr;
                             </a>
                           </td>
@@ -330,7 +304,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
               <tbody>
                 <tr>
                   <td align="left" style="font-size:0px;padding:0 12px 0 0;word-break:break-word;">
-                    <img alt="Thumbnail" src="${createSvgPlaceholder(200, 200, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:6px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:140px;font-size:13px;" width="140" />
+                    <img alt="Thumbnail" src="${createSvgPlaceholder(200, 200, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:6px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:140px;font-size:13px;" width="140" height="auto" />
                   </td>
                 </tr>
               </tbody>
@@ -403,7 +377,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
               <tbody>
                 <tr>
                   <td align="right" style="font-size:0px;padding:0;word-break:break-word;">
-                    <img alt="Thumbnail" src="${createSvgPlaceholder(200, 200, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:6px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:140px;font-size:13px;" width="140" />
+                    <img alt="Thumbnail" src="${createSvgPlaceholder(200, 200, "Image", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:6px;display:block;outline:none;text-decoration:none;height:auto;width:100%;max-width:140px;font-size:13px;" width="140" height="auto" />
                   </td>
                 </tr>
               </tbody>
@@ -442,7 +416,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
               <tbody>
                 <tr>
                   <td align="center" style="font-size:0px;padding:0 8px 0 0;word-break:break-word;">
-                    <img alt="Left Image" src="${createSvgPlaceholder(320, 220, "Image 1", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="310" />
+                    <img alt="Left Image" src="${createSvgPlaceholder(320, 220, "Image 1", "#e0e7ff", "#4338ca")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="310" height="auto" />
                   </td>
                 </tr>
               </tbody>
@@ -453,7 +427,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
               <tbody>
                 <tr>
                   <td align="center" style="font-size:0px;padding:0 0 0 8px;word-break:break-word;">
-                    <img alt="Right Image" src="${createSvgPlaceholder(320, 220, "Image 2", "#dcfce7", "#15803d")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="310" />
+                    <img alt="Right Image" src="${createSvgPlaceholder(320, 220, "Image 2", "#dcfce7", "#15803d")}" style="border:0;border-radius:8px;display:block;outline:none;text-decoration:none;height:auto;width:100%;font-size:13px;" width="310" height="auto" />
                   </td>
                 </tr>
               </tbody>
@@ -553,7 +527,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                     <tbody>
                       <tr>
                         <td align="center" bgcolor="#4f46e5" role="presentation" style="border:none;border-radius:6px;cursor:auto;padding:12px 24px;background:#4f46e5;" valign="middle">
-                          <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank" rel="noopener noreferrer">
+                          <a href="#" style="display:inline-block;background:#4f46e5;color:#ffffff;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank">
                             Primary Button &rarr;
                           </a>
                         </td>
@@ -566,7 +540,7 @@ export const EMAIL_COMPONENT_PRESETS: ComponentPreset[] = [
                     <tbody>
                       <tr>
                         <td align="center" bgcolor="#f1f5f9" role="presentation" style="border:1px solid #cbd5e1;border-radius:6px;cursor:auto;padding:11px 24px;background:#f1f5f9;" valign="middle">
-                          <a href="#" style="display:inline-block;background:#f1f5f9;color:#334155;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank" rel="noopener noreferrer">
+                          <a href="#" style="display:inline-block;background:#f1f5f9;color:#334155;font-family:Arial, sans-serif;font-size:14px;font-weight:700;line-height:120%;margin:0;text-decoration:none;text-transform:none;border-radius:6px;" target="_blank">
                             Secondary Button
                           </a>
                         </td>

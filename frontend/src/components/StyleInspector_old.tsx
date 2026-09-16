@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { 
   Plus, 
   SlidersHorizontal, 
@@ -23,7 +23,6 @@ import {
   Image as ImageIcon,
   FolderOpen,
   Upload,
-  Copy,
   Smartphone,
   Columns2
 } from "lucide-react";
@@ -59,9 +58,6 @@ interface StyleInspectorProps {
   onReplaceImage?: (el: HTMLElement) => void;
   onUpdateAttribute?: (el: HTMLElement, attr: string, value: string) => void;
   domRoot?: HTMLElement | null;
-  canCopySectionCode?: boolean;
-  copySectionStatus?: "idle" | "copied" | "error";
-  onCopySectionCode?: () => Promise<boolean> | boolean;
 }
 
 interface DomTreeNodeProps {
@@ -290,9 +286,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   onReplaceImage,
   onUpdateAttribute,
   domRoot,
-  canCopySectionCode = false,
-  copySectionStatus = "idle",
-  onCopySectionCode,
 }) => {
   // Main Panel Tab: "components" (default) vs "styles"
   const [internalTab, setInternalTab] = useState<"components" | "styles">("components");
@@ -304,18 +297,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
       onTabChange(tab);
     }
   };
-  const handleCopySectionClick = useCallback(async () => {
-    if (!canCopySectionCode || !onCopySectionCode) return;
-    await onCopySectionCode();
-  }, [canCopySectionCode, onCopySectionCode]);
-
-  const copyButtonLabel =
-    copySectionStatus === "copied"
-      ? "Copied"
-      : copySectionStatus === "error"
-        ? "Copy failed"
-        : "Copy section code";
-
 
   const [componentCategory, setComponentCategory] = useState<string>("all");
   const [componentSearch, setComponentSearch] = useState<string>("");
@@ -336,7 +317,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   const [newProp, setNewProp] = useState("");
   const [newVal, setNewVal] = useState("");
   const [disabledProps, setDisabledProps] = useState<Set<string>>(new Set());
-  const [disabledPropValues, setDisabledPropValues] = useState<Record<string, string>>({});
   const [focusedField, setFocusedField] = useState<{ id: string; type: "prop" | "val"; propName?: string } | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(0);
 
@@ -344,21 +324,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   const newValInputRef = useRef<HTMLInputElement>(null);
 
   const blurTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    setDisabledProps(new Set());
-    setDisabledPropValues({});
-    setFocusedField(null);
-  }, [selectedElement]);
-
-  useEffect(() => {
-    return () => {
-      if (blurTimerRef.current) {
-        window.clearTimeout(blurTimerRef.current);
-        blurTimerRef.current = null;
-      }
-    };
-  }, []);
 
   const handleFieldFocus = (field: { id: string; type: "prop" | "val"; propName?: string }) => {
     if (blurTimerRef.current) {
@@ -388,19 +353,18 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
         try {
           const cssRules = Array.from(sheet.cssRules || []);
           cssRules.forEach((rule) => {
-            const maybeStyleRule = rule as CSSStyleRule;
-            if ((rule as CSSRule).type === 1 && typeof maybeStyleRule.selectorText === "string" && maybeStyleRule.style) {
+            if (rule instanceof CSSStyleRule) {
               try {
-                if (selectedElement.matches(maybeStyleRule.selectorText)) {
+                if (selectedElement.matches(rule.selectorText)) {
                   const props: Record<string, string> = {};
-                  for (let i = 0; i < maybeStyleRule.style.length; i++) {
-                    const p = maybeStyleRule.style[i];
-                    props[p] = maybeStyleRule.style.getPropertyValue(p);
+                  for (let i = 0; i < rule.style.length; i++) {
+                    const p = rule.style[i];
+                    props[p] = rule.style.getPropertyValue(p);
                   }
                   rules.push({
-                    selector: maybeStyleRule.selectorText,
+                    selector: rule.selectorText,
                     source: `style_${sheetIdx + 1}.css`,
-                    styleDeclaration: maybeStyleRule.style,
+                    styleDeclaration: rule.style,
                     properties: props,
                   });
                 }
@@ -508,26 +472,18 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   }, [activeSuggestions.length]);
 
   const handleArrowKeyStep = (e: React.KeyboardEvent<HTMLInputElement>, prop: string, val: string) => {
-    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-    const numeric = String(val).trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i);
-    if (!numeric) return;
-
-    const num = Number(numeric[1]);
-    if (!Number.isFinite(num)) return;
-
-    const unitlessProps = new Set(["opacity", "font-weight", "z-index", "line-height", "flex", "order"]);
-    const propLower = prop.toLowerCase();
-    const unit = numeric[2] || (unitlessProps.has(propLower) ? "" : "px");
-    if (!unit && !unitlessProps.has(propLower) && numeric[2] === "") return;
-
-    e.preventDefault();
-    const step = e.shiftKey ? 10 : (e.altKey ? 0.1 : 1);
-    let next = e.key === "ArrowUp" ? num + step : num - step;
-    if (propLower === "opacity") next = Math.max(0, Math.min(1, next));
-    if (propLower === "z-index") next = Math.round(next);
-    if (propLower === "font-weight") next = Math.max(1, Math.min(1000, Math.round(next / 100) * 100));
-    const rounded = Math.round(next * 1000) / 1000;
-    onUpdateStyle(prop, `${rounded}${unit}`);
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const match = val.match(/^([+-]?[\d.]+)(.*)$/);
+      if (match) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : (e.altKey ? 0.1 : 1);
+        const num = parseFloat(match[1]);
+        const unit = match[2] || "px";
+        const newNum = e.key === "ArrowUp" ? num + step : num - step;
+        const rounded = Math.round(newNum * 100) / 100;
+        onUpdateStyle(prop, `${rounded}${unit}`);
+      }
+    }
   };
 
   const handleCommitNewProp = () => {
@@ -557,12 +513,11 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   }, [selectedElement]);
 
   const filteredInlineProps = useMemo(() => {
-    const merged = { ...disabledPropValues, ...inlineStyles };
-    const entries = Object.entries(merged);
+    const entries = Object.entries(inlineStyles);
     if (!filterText.trim()) return entries;
     const q = filterText.toLowerCase();
-    return entries.filter(([p, v]) => p.toLowerCase().includes(q) || String(v).toLowerCase().includes(q));
-  }, [inlineStyles, disabledPropValues, filterText]);
+    return entries.filter(([p, v]) => p.toLowerCase().includes(q) || v.toLowerCase().includes(q));
+  }, [inlineStyles, filterText]);
 
   // Filter component presets
   const filteredPresets = useMemo(() => {
@@ -574,23 +529,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
       return matchCat && matchQuery;
     });
   }, [componentCategory, componentSearch]);
-
-  const copyButtonBaseStyle: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: "5px",
-    padding: "5px 9px",
-    borderRadius: "6px",
-    border: copySectionStatus === "error" ? "1px solid #fecaca" : "1px solid #cbd5e1",
-    background: copySectionStatus === "copied" ? "#ecfdf5" : copySectionStatus === "error" ? "#fef2f2" : "#ffffff",
-    color: copySectionStatus === "copied" ? "#047857" : copySectionStatus === "error" ? "#dc2626" : "#334155",
-    fontSize: "11px",
-    fontWeight: 700,
-    cursor: canCopySectionCode ? "pointer" : "not-allowed",
-    opacity: canCopySectionCode ? 1 : 0.45,
-    whiteSpace: "nowrap",
-  };
 
   return (
     <div className="style-inspector-container" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -719,20 +657,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                 </button>
               </div>
             </div>
-
-            <button
-              type="button"
-              className="copy-section-code-btn"
-              onClick={handleCopySectionClick}
-              disabled={!canCopySectionCode}
-              aria-live="polite"
-              aria-label={copyButtonLabel}
-              title={canCopySectionCode ? "Copy the complete enclosing email section HTML" : "Select an email section or element inside one to copy its HTML"}
-              style={{ ...copyButtonBaseStyle, width: "100%" }}
-            >
-              <Copy size={12} />
-              <span>{copyButtonLabel}</span>
-            </button>
 
             {/* Placement Position Selector */}
             <div>
@@ -1540,19 +1464,6 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
 
       {/* Chrome DevTools Filter & Action Bar */}
       <div className="devtools-filter-bar">
-        <button
-          type="button"
-          className="copy-section-code-btn"
-          onClick={handleCopySectionClick}
-          disabled={!canCopySectionCode}
-          aria-live="polite"
-          aria-label={copyButtonLabel}
-          title={canCopySectionCode ? "Copy the complete enclosing email section HTML" : "Select an email section or element inside one to copy its HTML"}
-          style={copyButtonBaseStyle}
-        >
-          <Copy size={12} />
-          <span>{copyButtonLabel}</span>
-        </button>
         <div className="filter-input-wrapper">
           <input
             type="text"
@@ -1922,20 +1833,13 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                     checked={!isPropDisabled}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        const restoreValue = disabledPropValues[prop] ?? val;
                         setDisabledProps((prev) => {
                           const next = new Set(prev);
                           next.delete(prop);
                           return next;
                         });
-                        setDisabledPropValues((prev) => {
-                          const next = { ...prev };
-                          delete next[prop];
-                          return next;
-                        });
-                        onUpdateStyle(prop, restoreValue);
+                        onUpdateStyle(prop, val);
                       } else {
-                        setDisabledPropValues((prev) => ({ ...prev, [prop]: val }));
                         setDisabledProps((prev) => {
                           const next = new Set(prev);
                           next.add(prop);
@@ -2262,6 +2166,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                           type="color"
                           value={toHexColor(val)}
                           onChange={(e) => {
+                            rule.styleDeclaration.setProperty(prop, e.target.value);
                             onUpdateStyle(prop, e.target.value);
                           }}
                           style={{
@@ -2279,6 +2184,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
                       type="text"
                       value={val}
                       onChange={(e) => {
+                        rule.styleDeclaration.setProperty(prop, e.target.value);
                         onUpdateStyle(prop, e.target.value);
                       }}
                       onKeyDown={(e) => handleArrowKeyStep(e, prop, val)}
