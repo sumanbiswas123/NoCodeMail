@@ -27,7 +27,10 @@ import {
   ChevronRight,
   Download,
   Info,
-  FileText
+  FileText,
+  Cloud,
+  FolderOpen,
+  Code
 } from "lucide-react";
 import {
   EMAIL_CLIENT_CATALOG,
@@ -340,6 +343,8 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
   const [copiedTestId, setCopiedTestId] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testError, setTestError] = useState<string>("");
+  const [showSourceSelectModal, setShowSourceSelectModal] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const stopPolling = () => {
     setIsTesting(false);
@@ -546,8 +551,18 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
     return prepared;
   };
 
-  // Trigger real Email on Acid Cloud Test with Base64 image inlining
-  const handleStartCloudTest = async () => {
+  // Open Source Selection Modal for Cloud Test
+  const handleOpenSourceSelectModal = () => {
+    if (!creds.isConfigured) {
+      setTestError("API key not found. Add VITE_EOA_API_KEY & VITE_EOA_PASSWORD in .env.");
+      return;
+    }
+    setTestError("");
+    setShowSourceSelectModal(true);
+  };
+
+  // Execute Email on Acid Cloud Test with given HTML content
+  const executeCloudTest = async (contentToTest: string, sourceLabel?: string) => {
     if (!creds.isConfigured) {
       setTestError("API key not found. Add VITE_EOA_API_KEY & VITE_EOA_PASSWORD in .env.");
       return;
@@ -555,15 +570,45 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
 
     setIsTesting(true);
     setTestError("");
+    setShowSourceSelectModal(false);
 
     try {
-      const test = await runMailgunInspectTest(htmlContent, emailSubject || currentPdfName, pkgPrefix, undefined, currentPdfName);
+      const subject = emailSubject || currentPdfName || "Email Campaign";
+      const test = await runMailgunInspectTest(contentToTest, subject, pkgPrefix, undefined, currentPdfName);
       setActiveTestRun(test);
       setTestHistory(getTestHistory());
     } catch (err: any) {
       setTestError(err.message || "Failed to start inspect test.");
       setIsTesting(false);
     }
+  };
+
+  // Run test using currently active local HTML
+  const handleRunLocalHtml = () => {
+    executeCloudTest(htmlContent, "Local HTML");
+  };
+
+  // Trigger file picker for Veeva HTML
+  const handleSelectVeevaFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  // Handle selected Veeva HTML file upload
+  const handleVeevaFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        executeCloudTest(content, file.name);
+      }
+    };
+    reader.onerror = () => {
+      setTestError("Failed to read selected Veeva HTML file.");
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   };
 
   // Manual one-click sync / refresh (single check, no infinite loop)
@@ -832,7 +877,7 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
           {/* Cloud Inspect Test Trigger */}
           <button
             type="button"
-            onClick={handleStartCloudTest}
+            onClick={handleOpenSourceSelectModal}
             disabled={isTesting}
             title={creds.isConfigured ? "Run real render test via Email on Acid" : "Add VITE_EOA_API_KEY & VITE_EOA_PASSWORD in .env"}
             style={{
@@ -1662,7 +1707,7 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
                               type="button"
                               onClick={() => {
                                 setActiveModalClient(null);
-                                handleStartCloudTest();
+                                handleOpenSourceSelectModal();
                               }}
                               style={{
                                 display: "flex",
@@ -1800,7 +1845,7 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
                               type="button"
                               onClick={() => {
                                 setActiveModalClient(null);
-                                handleStartCloudTest();
+                                handleOpenSourceSelectModal();
                               }}
                               style={{
                                 display: "flex",
@@ -2287,6 +2332,255 @@ export const DevicePreviewViewer: React.FC<DevicePreviewViewerProps> = ({
                 }}
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden File Input for Veeva HTML Selection */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".html,.htm"
+        style={{ display: "none" }}
+        onChange={handleVeevaFileChange}
+      />
+
+      {/* Cloud Test HTML Source Selection Modal */}
+      {showSourceSelectModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 99999,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+          onClick={() => setShowSourceSelectModal(false)}
+        >
+          <div
+            style={{
+              background: "#ffffff",
+              borderRadius: "14px",
+              width: "100%",
+              maxWidth: "520px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+              border: "1px solid #e2e8f0",
+              overflow: "hidden",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "16px 20px",
+                borderBottom: "1px solid #e2e8f0",
+                background: "linear-gradient(135deg, #f8fafc, #f1f5f9)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "10px",
+                    background: "linear-gradient(135deg, #4f46e5, #6366f1)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#ffffff",
+                  }}
+                >
+                  <Cloud size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    Run Cloud Test
+                  </h3>
+                  <p style={{ margin: 0, fontSize: "12px", color: "#64748b" }}>
+                    Select HTML source for Email on Acid rendering
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSourceSelectModal(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  padding: "4px",
+                  borderRadius: "6px",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "#0f172a")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+              {/* Option 1: Run Local HTML */}
+              <div
+                onClick={handleRunLocalHtml}
+                style={{
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "14px",
+                  transition: "all 0.15s ease",
+                  background: "#ffffff",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#4f46e5";
+                  e.currentTarget.style.background = "#faf5ff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#e2e8f0";
+                  e.currentTarget.style.background = "#ffffff";
+                }}
+              >
+                <div
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "10px",
+                    background: "#f3e8ff",
+                    color: "#7e22ce",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Code size={20} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <span style={{ fontSize: "14px", fontWeight: "700", color: "#1e1b4b" }}>
+                      Run Local HTML
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "10.5px",
+                        fontWeight: "700",
+                        background: "#ede9fe",
+                        color: "#6b21a8",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                      }}
+                    >
+                      Active Editor
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: "12px", color: "#64748b", lineHeight: "1.4" }}>
+                    Tests the current compiled HTML from the active project using local asset paths.
+                  </p>
+                </div>
+              </div>
+
+              {/* Option 2: Select Veeva HTML */}
+              <div
+                onClick={handleSelectVeevaFileClick}
+                style={{
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "14px",
+                  transition: "all 0.15s ease",
+                  background: "#ffffff",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#0284c7";
+                  e.currentTarget.style.background = "#f0f9ff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#e2e8f0";
+                  e.currentTarget.style.background = "#ffffff";
+                }}
+              >
+                <div
+                  style={{
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "10px",
+                    background: "#e0f2fe",
+                    color: "#0369a1",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <FolderOpen size={20} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <span style={{ fontSize: "14px", fontWeight: "700", color: "#0c4a6e" }}>
+                      Select Veeva HTML
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "10.5px",
+                        fontWeight: "700",
+                        background: "#e0f2fe",
+                        color: "#0284c7",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                      }}
+                    >
+                      CDN / Hosted
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: "12px", color: "#64748b", lineHeight: "1.4" }}>
+                    Select a production Veeva HTML file from your disk where images are already hosted on live cloud CDNs.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-end",
+                padding: "12px 20px",
+                borderTop: "1px solid #e2e8f0",
+                background: "#f8fafc",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setShowSourceSelectModal(false)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: "6px",
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
+                  color: "#475569",
+                  fontSize: "12px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
               </button>
             </div>
           </div>

@@ -159,18 +159,23 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
 
             let detectedTargetPage = 1;
             let detectedEmailWidth = 700;
+            let detectedPdfPath = targetDir;
+            let cleanProjectName = projectName.replace(/_ai_package$/i, "");
+
             try {
               const metaRes = await nativeIPC.readFile(`${targetDir}\\project_meta.json`);
               if (metaRes.success && metaRes.content) {
                 const metaParsed = JSON.parse(metaRes.content);
                 if (metaParsed.target_page) detectedTargetPage = Number(metaParsed.target_page);
                 if (metaParsed.email_width) detectedEmailWidth = Number(metaParsed.email_width);
+                if (metaParsed.pdf_path) detectedPdfPath = metaParsed.pdf_path;
+                if (metaParsed.name) cleanProjectName = metaParsed.name.replace(/_ai_package$/i, "");
               }
             } catch {}
 
             const extractData: PDFExtractionData = {
               package_dir: targetDir,
-              json_path: inspectRes.design_json_path || `${targetDir}\\design.json`,
+              json_path: inspectRes.design_json_path || `${targetDir}\\${cleanProjectName}_design.json`,
               preview_image_path: inspectRes.preview_image_path || `${targetDir}\\page_${detectedTargetPage}_preview.png`,
               preview_image_filename: inspectRes.preview_image_path ? (inspectRes.preview_image_path.split(/[/\\]/).pop() || `page_${detectedTargetPage}_preview.png`) : `page_${detectedTargetPage}_preview.png`,
               total_pages: totalPages,
@@ -182,9 +187,11 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
               design_json: inspectRes.design_json,
             };
 
+            const htmlFileToStore = inspectRes.html_path || `${targetDir}\\${cleanProjectName}.html`;
+
             saveRecentProjectToStorage({
-              name: projectName,
-              path: inspectRes.html_path || `${targetDir}\\${projectName}.html`,
+              name: cleanProjectName,
+              path: detectedPdfPath || htmlFileToStore,
               type: "pdf",
               package_dir: targetDir,
               target_page: detectedTargetPage,
@@ -192,9 +199,14 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
             });
             refreshRecentProjects();
 
+            let pdfPathToPass = `${cleanProjectName}.pdf`;
+            if (detectedPdfPath && detectedPdfPath !== targetDir && !detectedPdfPath.endsWith("_ai_package")) {
+              pdfPathToPass = detectedPdfPath;
+            }
+
             if (onResumeProcess) {
               onResumeProcess({
-                pdfPath: targetDir,
+                pdfPath: pdfPathToPass,
                 targetPage: detectedTargetPage,
                 emailWidth: detectedEmailWidth,
                 extractData,
@@ -362,33 +374,73 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
     const parentDir = lastSlash === -1 ? "." : normPath.substring(0, lastSlash);
     const filename = lastSlash === -1 ? normPath : normPath.substring(lastSlash + 1);
     const baseName = filename.replace(/\.[^/.]+$/, "");
-    const packageDir = proj.package_dir || `${parentDir}\\${baseName}_ai_package`;
+    const cleanBase = baseName.replace(/_ai_package$/i, "");
+    const packageDir = proj.package_dir || `${parentDir}\\${cleanBase}_ai_package`;
     let targetPage = proj.target_page || 1;
     let emailWidth = proj.email_width || 700;
+    let effectivePdfPath = proj.path;
 
-    const jsonPath = `${packageDir}\\${baseName}_design.json`;
-    const mjmlPath = `${packageDir}\\${baseName}.mjml`;
-    const htmlPath = `${packageDir}\\${baseName}.html`;
     const metaPath = `${packageDir}\\project_meta.json`;
-
     try {
-      setLoadingPdf(true);
-      const [resJson, resMjml, resHtml, resMeta] = await Promise.all([
-        nativeIPC.readFile(jsonPath),
-        nativeIPC.readFile(mjmlPath),
-        nativeIPC.readFile(htmlPath),
-        nativeIPC.readFile(metaPath),
-      ]);
-
+      const resMeta = await nativeIPC.readFile(metaPath);
       if (resMeta.success && resMeta.content) {
         try {
           const metaObj = JSON.parse(resMeta.content);
           if (metaObj.target_page) targetPage = Number(metaObj.target_page);
           if (metaObj.email_width) emailWidth = Number(metaObj.email_width);
+          if (metaObj.pdf_path) effectivePdfPath = metaObj.pdf_path;
         } catch {}
       }
+    } catch {}
 
-      if (resJson.success && resJson.content) {
+    const jsonCandidates = [
+      `${packageDir}\\${cleanBase}_design.json`,
+      `${packageDir}\\${baseName}_design.json`,
+      `${packageDir}\\design.json`,
+    ];
+    const mjmlCandidates = [
+      `${packageDir}\\${cleanBase}.mjml`,
+      `${packageDir}\\${baseName}.mjml`,
+      `${packageDir}\\template.mjml`,
+    ];
+    const htmlCandidates = [
+      `${packageDir}\\${cleanBase}.html`,
+      `${packageDir}\\${baseName}.html`,
+      `${packageDir}\\index.html`,
+    ];
+
+    try {
+      setLoadingPdf(true);
+      let resJsonContent = "";
+      let effectiveJsonPath = jsonCandidates[0];
+      for (const jp of jsonCandidates) {
+        const r = await nativeIPC.readFile(jp);
+        if (r.success && r.content) {
+          resJsonContent = r.content;
+          effectiveJsonPath = jp;
+          break;
+        }
+      }
+
+      let resMjmlContent = "";
+      for (const mp of mjmlCandidates) {
+        const r = await nativeIPC.readFile(mp);
+        if (r.success && r.content) {
+          resMjmlContent = r.content;
+          break;
+        }
+      }
+
+      let resHtmlContent = "";
+      for (const hp of htmlCandidates) {
+        const r = await nativeIPC.readFile(hp);
+        if (r.success && r.content) {
+          resHtmlContent = r.content;
+          break;
+        }
+      }
+
+      if (resJsonContent) {
         let totalPages = 1;
         let totalImages = 0;
         let totalLinks = 0;
@@ -397,7 +449,7 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
         let totalTextBlocks = 0;
 
         try {
-          const parsed = JSON.parse(resJson.content);
+          const parsed = JSON.parse(resJsonContent);
           totalPages = parsed.total_pages || 1;
           if (Array.isArray(parsed.pages)) {
             for (const p of parsed.pages) {
@@ -413,7 +465,7 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
 
         const extractData: PDFExtractionData = {
           package_dir: packageDir,
-          json_path: jsonPath,
+          json_path: effectiveJsonPath,
           preview_image_path: `${packageDir}\\page_${targetPage}_preview.png`,
           preview_image_filename: `page_${targetPage}_preview.png`,
           total_pages: totalPages,
@@ -422,17 +474,17 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
           total_links: totalLinks,
           total_tables: totalTables,
           total_styles: totalStyles,
-          design_json: resJson.content,
+          design_json: resJsonContent,
         };
 
         if (onResumeProcess) {
           onResumeProcess({
-            pdfPath: proj.path,
+            pdfPath: effectivePdfPath,
             targetPage,
             emailWidth,
             extractData,
-            mjmlText: resMjml.content || "",
-            generatedHtml: resHtml.content || "",
+            mjmlText: resMjmlContent || "",
+            generatedHtml: resHtmlContent || "",
           });
           return;
         }

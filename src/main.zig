@@ -1059,103 +1059,103 @@ pub const App = struct {
             }
         }
 
-        // Check if OneView is installed on the user's system
-        {
-            var oneview_path: ?[]const u8 = null;
-
-            // 1. Try reading command from registry HKCU\Software\Classes\OneView.Assoc\shell\open\command
-            const ov_reg_key_w = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Classes\\OneView.Assoc\\shell\\open\\command");
-            var h_ov_key: usize = 0;
-            if (win32_shell.RegOpenKeyExW(0x80000001, ov_reg_key_w, 0, 0x20019, &h_ov_key) == 0) {
-                defer _ = win32_shell.RegCloseKey(h_ov_key);
-                var cmd_data: [1024]u8 = undefined;
-                var cmd_size: u32 = cmd_data.len;
-                if (win32_shell.RegQueryValueExW(h_ov_key, null, null, null, &cmd_data, &cmd_size) == 0 and cmd_size > 0) {
-                    const w_cmd = @as([*]const u16, @ptrCast(@alignCast(&cmd_data)))[0 .. (cmd_size / 2)];
-                    const clean_cmd = std.mem.sliceTo(w_cmd, 0);
-                    var cmd_u8: [1024]u8 = undefined;
-                    if (std.unicode.utf16LeToUtf8(&cmd_u8, clean_cmd)) |c_len| {
-                        var raw_cmd = cmd_u8[0..c_len];
-                        if (std.mem.startsWith(u8, raw_cmd, "\"")) {
-                            if (std.mem.indexOf(u8, raw_cmd[1..], "\"")) |q_end| {
-                                raw_cmd = raw_cmd[1 .. 1 + q_end];
-                            }
-                        } else if (std.mem.indexOf(u8, raw_cmd, ".exe")) |exe_idx| {
-                            raw_cmd = raw_cmd[0 .. exe_idx + 4];
-                        }
-                        if (openFileUtf8(raw_cmd, "rb")) |f| {
-                            _ = fclose(f);
-                            oneview_path = alloc.dupe(u8, raw_cmd) catch null;
-                        }
-                    } else |_| {}
-                }
-            }
-
-            // 2. Fallback: Check %LOCALAPPDATA%\OneView\oneview.exe
-            if (oneview_path == null) {
-                var localapp_w: [1024]u16 = undefined;
-                const env_name_w = std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA");
-                const len = win32_base.GetEnvironmentVariableW(env_name_w, &localapp_w, localapp_w.len);
-                if (len > 0 and len < localapp_w.len) {
-                    var localapp_u8: [1024]u8 = undefined;
-                    if (std.unicode.utf16LeToUtf8(&localapp_u8, localapp_w[0..len])) |la_len| {
-                        const candidate = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{localapp_u8[0..la_len]}) catch null;
-                        if (candidate) |cand| {
-                            if (openFileUtf8(cand, "rb")) |f| {
-                                _ = fclose(f);
-                                oneview_path = cand;
-                            }
-                        }
-                    } else |_| {}
-                }
-            }
-
-            // 3. Fallback: Check %APPDATA%\OneView\oneview.exe or %APPDATA%\oneview.exe
-            if (oneview_path == null) {
-                var appdata_w: [1024]u16 = undefined;
-                const env_app_w = std.unicode.utf8ToUtf16LeStringLiteral("APPDATA");
-                const len = win32_base.GetEnvironmentVariableW(env_app_w, &appdata_w, appdata_w.len);
-                if (len > 0 and len < appdata_w.len) {
-                    var appdata_u8: [1024]u8 = undefined;
-                    if (std.unicode.utf16LeToUtf8(&appdata_u8, appdata_w[0..len])) |ad_len| {
-                        const candidate1 = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
-                        if (candidate1) |cand1| {
-                            if (openFileUtf8(cand1, "rb")) |f| {
-                                _ = fclose(f);
-                                oneview_path = cand1;
-                            }
-                        }
-                        if (oneview_path == null) {
-                            const candidate2 = std.fmt.allocPrint(alloc, "{s}\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
-                            if (candidate2) |cand2| {
-                                if (openFileUtf8(cand2, "rb")) |f| {
-                                _ = fclose(f);
-                                oneview_path = cand2;
-                            }
-                        }
-                    }
-                    } else |_| {}
-                }
-            }
-
-            // If found and not already in list, add to browser list
-            if (oneview_path) |path| {
-                var exists = false;
-                for (browser_list.items) |b| {
-                    if (std.ascii.indexOfIgnoreCase(b.name, "oneview") != null or std.ascii.indexOfIgnoreCase(b.path, "oneview.exe") != null) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    browser_list.append(alloc, .{
-                        .id = "oneview",
-                        .name = "OneView",
-                        .path = path,
-                    }) catch {};
-                }
-            }
-        }
+        // Check if OneView is installed on the user's system (Temporarily commented out)
+        // {
+        //     var oneview_path: ?[]const u8 = null;
+        //
+        //     // 1. Try reading command from registry HKCU\Software\Classes\OneView.Assoc\shell\open\command
+        //     const ov_reg_key_w = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Classes\\OneView.Assoc\\shell\\open\\command");
+        //     var h_ov_key: usize = 0;
+        //     if (win32_shell.RegOpenKeyExW(0x80000001, ov_reg_key_w, 0, 0x20019, &h_ov_key) == 0) {
+        //         defer _ = win32_shell.RegCloseKey(h_ov_key);
+        //         var cmd_data: [1024]u8 = undefined;
+        //         var cmd_size: u32 = cmd_data.len;
+        //         if (win32_shell.RegQueryValueExW(h_ov_key, null, null, null, &cmd_data, &cmd_size) == 0 and cmd_size > 0) {
+        //             const w_cmd = @as([*]const u16, @ptrCast(@alignCast(&cmd_data)))[0 .. (cmd_size / 2)];
+        //             const clean_cmd = std.mem.sliceTo(w_cmd, 0);
+        //             var cmd_u8: [1024]u8 = undefined;
+        //             if (std.unicode.utf16LeToUtf8(&cmd_u8, clean_cmd)) |c_len| {
+        //                 var raw_cmd = cmd_u8[0..c_len];
+        //                 if (std.mem.startsWith(u8, raw_cmd, "\"")) {
+        //                     if (std.mem.indexOf(u8, raw_cmd[1..], "\"")) |q_end| {
+        //                         raw_cmd = raw_cmd[1 .. 1 + q_end];
+        //                     }
+        //                 } else if (std.mem.indexOf(u8, raw_cmd, ".exe")) |exe_idx| {
+        //                     raw_cmd = raw_cmd[0 .. exe_idx + 4];
+        //                 }
+        //                 if (openFileUtf8(raw_cmd, "rb")) |f| {
+        //                     _ = fclose(f);
+        //                     oneview_path = alloc.dupe(u8, raw_cmd) catch null;
+        //                 }
+        //             } else |_| {}
+        //         }
+        //     }
+        //
+        //     // 2. Fallback: Check %LOCALAPPDATA%\OneView\oneview.exe
+        //     if (oneview_path == null) {
+        //         var localapp_w: [1024]u16 = undefined;
+        //         const env_name_w = std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA");
+        //         const len = win32_base.GetEnvironmentVariableW(env_name_w, &localapp_w, localapp_w.len);
+        //         if (len > 0 and len < localapp_w.len) {
+        //             var localapp_u8: [1024]u8 = undefined;
+        //             if (std.unicode.utf16LeToUtf8(&localapp_u8, localapp_w[0..len])) |la_len| {
+        //                 const candidate = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{localapp_u8[0..la_len]}) catch null;
+        //                 if (candidate) |cand| {
+        //                     if (openFileUtf8(cand, "rb")) |f| {
+        //                         _ = fclose(f);
+        //                         oneview_path = cand;
+        //                     }
+        //                 }
+        //             } else |_| {}
+        //         }
+        //     }
+        //
+        //     // 3. Fallback: Check %APPDATA%\OneView\oneview.exe or %APPDATA%\oneview.exe
+        //     if (oneview_path == null) {
+        //         var appdata_w: [1024]u16 = undefined;
+        //         const env_app_w = std.unicode.utf8ToUtf16LeStringLiteral("APPDATA");
+        //         const len = win32_base.GetEnvironmentVariableW(env_app_w, &appdata_w, appdata_w.len);
+        //         if (len > 0 and len < appdata_w.len) {
+        //             var appdata_u8: [1024]u8 = undefined;
+        //             if (std.unicode.utf16LeToUtf8(&appdata_u8, appdata_w[0..len])) |ad_len| {
+        //                 const candidate1 = std.fmt.allocPrint(alloc, "{s}\\OneView\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
+        //                 if (candidate1) |cand1| {
+        //                     if (openFileUtf8(cand1, "rb")) |f| {
+        //                         _ = fclose(f);
+        //                         oneview_path = cand1;
+        //                     }
+        //                 }
+        //                 if (oneview_path == null) {
+        //                     const candidate2 = std.fmt.allocPrint(alloc, "{s}\\oneview.exe", .{appdata_u8[0..ad_len]}) catch null;
+        //                     if (candidate2) |cand2| {
+        //                         if (openFileUtf8(cand2, "rb")) |f| {
+        //                             _ = fclose(f);
+        //                             oneview_path = cand2;
+        //                         }
+        //                     }
+        //                 }
+        //             } else |_| {}
+        //         }
+        //     }
+        //
+        //     // If found and not already in list, add to browser list
+        //     if (oneview_path) |path| {
+        //         var exists = false;
+        //         for (browser_list.items) |b| {
+        //             if (std.ascii.indexOfIgnoreCase(b.name, "oneview") != null or std.ascii.indexOfIgnoreCase(b.path, "oneview.exe") != null) {
+        //                 exists = true;
+        //                 break;
+        //             }
+        //         }
+        //         if (!exists) {
+        //             browser_list.append(alloc, .{
+        //                 .id = "oneview",
+        //                 .name = "OneView",
+        //                 .path = path,
+        //             }) catch {};
+        //         }
+        //     }
+        // }
 
         const ResStruct = struct {
             success: bool,

@@ -26,7 +26,11 @@ export const BrowserSelectModal: React.FC<BrowserSelectModalProps> = ({
     if (isOpen) {
       setLoading(true);
       nativeIPC.getInstalledBrowsers().then((list) => {
-        setBrowsers(list || []);
+        // OneView browser commented out from selection (preserves all other installed browsers)
+        const validBrowsers = (list || []).filter(
+          (b) => !b.name.toLowerCase().includes("oneview") && !b.id.toLowerCase().includes("oneview")
+        );
+        setBrowsers(validBrowsers);
         setLoading(false);
       }).catch(() => {
         setLoading(false);

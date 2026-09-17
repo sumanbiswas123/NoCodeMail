@@ -76,20 +76,34 @@ export const Screen2Process: React.FC<Screen2Props> = ({
 
   const fileName = typeof pdfPath === "string" ? pdfPath.split(/[/\\]/).pop() || "email-design.pdf" : "email-design.pdf";
   const baseName = fileName.replace(/\.[^/.]+$/, "");
+  const cleanBase = baseName.replace(/_ai_package$/i, "");
 
   // Detect if an existing HTML file is already present on disk in this project
   useEffect(() => {
     const checkHtmlOnDisk = async () => {
       if (!extractData?.package_dir) return;
-      const htmlFile = `${extractData.package_dir}\\${baseName}.html`;
-      const res = await nativeIPC.readFile(htmlFile);
-      if (res.success && res.content && res.content.trim().length > 0) {
-        setExistingHtmlOnDisk(res.content);
+      const htmlCandidates = [
+        `${extractData.package_dir}\\${cleanBase}.html`,
+        `${extractData.package_dir}\\${baseName}.html`,
+        `${extractData.package_dir}\\index.html`
+      ];
+
+      let foundContent: string | null = null;
+      for (const hPath of htmlCandidates) {
+        const res = await nativeIPC.readFile(hPath);
+        if (res.success && res.content && res.content.trim().length > 0) {
+          foundContent = res.content;
+          break;
+        }
+      }
+
+      if (foundContent) {
+        setExistingHtmlOnDisk(foundContent);
         setHasExistingHtml(true);
         // If generatedHtml is currently empty, load the saved HTML into preview
         if (!generatedHtml) {
-          setGeneratedHtml(res.content);
-          setCharCount(res.content.length);
+          setGeneratedHtml(foundContent);
+          setCharCount(foundContent.length);
         }
       } else {
         setExistingHtmlOnDisk(null);
@@ -97,7 +111,7 @@ export const Screen2Process: React.FC<Screen2Props> = ({
       }
     };
     checkHtmlOnDisk();
-  }, [extractData?.package_dir, baseName]);
+  }, [extractData?.package_dir, cleanBase, baseName]);
 
   const handleOpenMjmlAgent = () => {
     const savedBrowser = localStorage.getItem("nocodemail_agent_browser");
@@ -295,11 +309,11 @@ export const Screen2Process: React.FC<Screen2Props> = ({
 
         // 2. Save MJML source so it's persisted; only auto-write HTML if no previous HTML existed
         if (extractData?.package_dir) {
-          const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+          const savePathMjml = `${extractData.package_dir}\\${cleanBase}.mjml`;
           await nativeIPC.saveFile(savePathMjml, text);
 
           if (!hasExistingHtml) {
-            const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
+            const savePathHtml = `${extractData.package_dir}\\${cleanBase}.html`;
             await nativeIPC.saveFile(savePathHtml, compiledHtml);
           }
         }
@@ -313,8 +327,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
   const handleOpenPreviousHtml = () => {
     const contentToOpen = existingHtmlOnDisk || generatedHtml;
     const fullHtmlPath = extractData?.package_dir
-      ? `${extractData.package_dir}\\${baseName}.html`
-      : `${baseName}.html`;
+      ? `${extractData.package_dir}\\${cleanBase}.html`
+      : `${cleanBase}.html`;
     if (extractData?.package_dir) {
       localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
     }
@@ -341,8 +355,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
 
     if (extractData?.package_dir && htmlToSave) {
-      const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
-      const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+      const savePathHtml = `${extractData.package_dir}\\${cleanBase}.html`;
+      const savePathMjml = `${extractData.package_dir}\\${cleanBase}.mjml`;
       const savePathMeta = `${extractData.package_dir}\\project_meta.json`;
       await nativeIPC.saveFile(savePathHtml, htmlToSave);
       await nativeIPC.saveFile(savePathMjml, mjmlText);
@@ -362,8 +376,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
 
     const fullHtmlPath = extractData?.package_dir
-      ? `${extractData.package_dir}\\${baseName}.html`
-      : `${baseName}.html`;
+      ? `${extractData.package_dir}\\${cleanBase}.html`
+      : `${cleanBase}.html`;
     if (extractData?.package_dir) {
       localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
     }
@@ -389,14 +403,14 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
 
     if (extractData?.package_dir && htmlToOpen) {
-      const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
-      const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+      const savePathHtml = `${extractData.package_dir}\\${cleanBase}.html`;
+      const savePathMjml = `${extractData.package_dir}\\${cleanBase}.mjml`;
       const savePathMeta = `${extractData.package_dir}\\project_meta.json`;
       await nativeIPC.saveFile(savePathHtml, htmlToOpen);
       await nativeIPC.saveFile(savePathMjml, mjmlText);
       try {
         const metaObj = {
-          name: fileName,
+          name: cleanBase,
           pdf_path: pdfPath,
           target_page: targetPage || 1,
           email_width: emailWidth || 700,
@@ -411,8 +425,8 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
 
     const fullHtmlPath = extractData?.package_dir
-      ? `${extractData.package_dir}\\${baseName}.html`
-      : `${baseName}.html`;
+      ? `${extractData.package_dir}\\${cleanBase}.html`
+      : `${cleanBase}.html`;
     if (extractData?.package_dir) {
       localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
     }
