@@ -1637,7 +1637,7 @@ pub fn extractPdfPackageNative(
 
     try json_buf.print("  ]\n}}\n", .{});
 
-    const json_filename = try std.fmt.allocPrint(allocator, "{s}_design.json", .{base_name});
+    const json_filename = try std.fmt.allocPrint(allocator, "{s}_design.json.txt", .{base_name});
     defer allocator.free(json_filename);
     const json_path = try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ package_dir, json_filename });
 
@@ -1650,7 +1650,22 @@ pub fn extractPdfPackageNative(
         if (jf) |f| {
             _ = fwrite(json_buf.data.items.ptr, 1, json_buf.data.items.len, f);
             _ = fclose(f);
-            logMsg("Saved JSON design structure to {s}", .{json_path});
+            logMsg("Saved JSON design structure (.txt) to {s}", .{json_path});
+        }
+    }
+
+    // Also write standard .json copy for complete local tooling compatibility
+    const json_std_filename = try std.fmt.allocPrint(allocator, "{s}_design.json", .{base_name});
+    defer allocator.free(json_std_filename);
+    const json_std_path = try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ package_dir, json_std_filename });
+    const w_json_std_len = win32_dir.MultiByteToWideChar(65001, 0, json_std_path.ptr, @intCast(json_std_path.len), &w_json_buf, @intCast(w_json_buf.len - 1));
+    if (w_json_std_len > 0) {
+        w_json_buf[@intCast(w_json_std_len)] = 0;
+        const mode_wb: [3:0]u16 = .{ 'w', 'b', 0 };
+        const jf = _wfopen(@ptrCast(&w_json_buf), &mode_wb);
+        if (jf) |f| {
+            _ = fwrite(json_buf.data.items.ptr, 1, json_buf.data.items.len, f);
+            _ = fclose(f);
         }
     }
 

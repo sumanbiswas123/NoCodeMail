@@ -13,7 +13,9 @@ import {
   SlidersHorizontal,
   ChevronRight,
   Crop,
-  Bot
+  Bot,
+  FolderKanban,
+  AlertTriangle
 } from "lucide-react";
 import { nativeIPC, MarkedRegion, FooterPreset, PDFExtractionData } from "../services/ipc";
 import { PdfMarkingModal } from "../components/PdfMarkingModal";
@@ -85,6 +87,13 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
   const [isDragging, setIsDragging] = useState(false);
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [loadingHtml, setLoadingHtml] = useState(false);
+  const [loadingProject, setLoadingProject] = useState(false);
+  const [invalidProjectModal, setInvalidProjectModal] = useState<{
+    open: boolean;
+    dir?: string;
+    error?: string;
+    filesFound?: string[];
+  } | null>(null);
 
   // iOS Glass Modal State
   const [showPdfModal, setShowPdfModal] = useState(false);
@@ -113,6 +122,133 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
     setSelectedEmailWidth(700);
   };
 
+  const handleSelectProject = async () => {
+    try {
+      setLoadingProject(true);
+      const res = await nativeIPC.chooseProject();
+      if (res.success && res.path) {
+        // Inspect the chosen path / directory
+        const inspectRes = await nativeIPC.inspectProject(res.path);
+        if (inspectRes.success) {
+          const targetDir = inspectRes.package_dir || res.path;
+          const projectName = inspectRes.project_name || targetDir.split(/[/\\]/).pop() || "Imported Project";
+
+          if (inspectRes.design_json) {
+            // Full AI package with design JSON
+            let totalPages = 1;
+            let totalImages = 0;
+            let totalLinks = 0;
+            let totalTables = 0;
+            let totalStyles = 0;
+            let totalTextBlocks = 0;
+
+            try {
+              const parsed = JSON.parse(inspectRes.design_json);
+              totalPages = parsed.total_pages || 1;
+              if (Array.isArray(parsed.pages)) {
+                for (const p of parsed.pages) {
+                  if (Array.isArray(p.elements)) {
+                    for (const el of p.elements) {
+                      if (el.type === "image") totalImages++;
+                      else if (el.type === "text_block") totalTextBlocks++;
+                    }
+                  }
+                }
+              }
+            } catch {}
+
+            let detectedTargetPage = 1;
+            let detectedEmailWidth = 700;
+            try {
+              const metaRes = await nativeIPC.readFile(`${targetDir}\\project_meta.json`);
+              if (metaRes.success && metaRes.content) {
+                const metaParsed = JSON.parse(metaRes.content);
+                if (metaParsed.target_page) detectedTargetPage = Number(metaParsed.target_page);
+                if (metaParsed.email_width) detectedEmailWidth = Number(metaParsed.email_width);
+              }
+            } catch {}
+
+            const extractData: PDFExtractionData = {
+              package_dir: targetDir,
+              json_path: inspectRes.design_json_path || `${targetDir}\\design.json`,
+              preview_image_path: inspectRes.preview_image_path || `${targetDir}\\page_${detectedTargetPage}_preview.png`,
+              preview_image_filename: inspectRes.preview_image_path ? (inspectRes.preview_image_path.split(/[/\\]/).pop() || `page_${detectedTargetPage}_preview.png`) : `page_${detectedTargetPage}_preview.png`,
+              total_pages: totalPages,
+              total_text_blocks: totalTextBlocks,
+              total_images: totalImages,
+              total_links: totalLinks,
+              total_tables: totalTables,
+              total_styles: totalStyles,
+              design_json: inspectRes.design_json,
+            };
+
+            saveRecentProjectToStorage({
+              name: projectName,
+              path: inspectRes.html_path || `${targetDir}\\${projectName}.html`,
+              type: "pdf",
+              package_dir: targetDir,
+              target_page: detectedTargetPage,
+              email_width: detectedEmailWidth,
+            });
+            refreshRecentProjects();
+
+            if (onResumeProcess) {
+              onResumeProcess({
+                pdfPath: targetDir,
+                targetPage: detectedTargetPage,
+                emailWidth: detectedEmailWidth,
+                extractData,
+                mjmlText: inspectRes.mjml_content || "",
+                generatedHtml: inspectRes.html_content || "",
+              });
+              return;
+            }
+          }
+
+          // If it has HTML content
+          if (inspectRes.html_content && inspectRes.html_path) {
+            saveRecentProjectToStorage({
+              name: projectName,
+              path: inspectRes.html_path,
+              type: "html",
+              package_dir: targetDir,
+            });
+            refreshRecentProjects();
+            onHtmlLoaded(inspectRes.html_path, inspectRes.html_content);
+            return;
+          }
+
+          // Fallback if raw HTML file was chosen
+          if (res.path.endsWith(".html") || res.path.endsWith(".htm")) {
+            const htmlRes = await nativeIPC.readFile(res.path);
+            if (htmlRes.success && htmlRes.content) {
+              saveRecentProjectToStorage({
+                name: projectName,
+                path: res.path,
+                type: "html",
+              });
+              refreshRecentProjects();
+              onHtmlLoaded(res.path, htmlRes.content);
+              return;
+            }
+          }
+        }
+
+        // Invalid project structure
+        setInvalidProjectModal({
+          open: true,
+          dir: inspectRes.checked_dir || res.path,
+          error: inspectRes.error || "The selected folder is missing required email project files (.html, .mjml, or _design.json).",
+          filesFound: inspectRes.files_found || [],
+        });
+      }
+    } catch (e) {
+      console.error("Select project error:", e);
+    } finally {
+      setLoadingProject(false);
+    }
+  };
+
   const handleChoosePdfFromDisk = async () => {
     try {
       setLoadingPdf(true);
@@ -120,13 +256,35 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
       if (res.success && res.path) {
         setModalPdfPath(res.path);
         const name = res.path.split(/[/\\]/).pop() || "email-design.pdf";
-        saveRecentProjectToStorage({ name, path: res.path, type: "pdf" });
+        
+        // Find if this PDF was previously opened to pre-select its page
+        let defaultPage = 1;
+        const recent = getRecentProjectsFromStorage().find((p) => p.path === res.path);
+        if (recent?.target_page) {
+          defaultPage = recent.target_page;
+        } else {
+          const normPath = res.path.replace(/\//g, "\\");
+          const lastSlash = normPath.lastIndexOf("\\");
+          const parentDir = lastSlash === -1 ? "." : normPath.substring(0, lastSlash);
+          const filename = lastSlash === -1 ? normPath : normPath.substring(lastSlash + 1);
+          const baseName = filename.replace(/\.[^/.]+$/, "");
+          const metaPath = `${parentDir}\\${baseName}_ai_package\\project_meta.json`;
+          try {
+            const metaRes = await nativeIPC.readFile(metaPath);
+            if (metaRes.success && metaRes.content) {
+              const metaObj = JSON.parse(metaRes.content);
+              if (metaObj.target_page) defaultPage = Number(metaObj.target_page);
+            }
+          } catch {}
+        }
+
+        saveRecentProjectToStorage({ name, path: res.path, type: "pdf", target_page: defaultPage });
         refreshRecentProjects();
 
         // Query total pages
         const info = await nativeIPC.getPdfInfo(res.path);
         setTotalPages(info.total_pages || 1);
-        setSelectedPage(1);
+        setSelectedPage(defaultPage);
         setExtractSinglePage(true); // Always enabled by default
       }
     } catch (e) {
@@ -205,20 +363,30 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
     const filename = lastSlash === -1 ? normPath : normPath.substring(lastSlash + 1);
     const baseName = filename.replace(/\.[^/.]+$/, "");
     const packageDir = proj.package_dir || `${parentDir}\\${baseName}_ai_package`;
-    const targetPage = proj.target_page || 1;
-    const emailWidth = proj.email_width || 700;
+    let targetPage = proj.target_page || 1;
+    let emailWidth = proj.email_width || 700;
 
     const jsonPath = `${packageDir}\\${baseName}_design.json`;
     const mjmlPath = `${packageDir}\\${baseName}.mjml`;
     const htmlPath = `${packageDir}\\${baseName}.html`;
+    const metaPath = `${packageDir}\\project_meta.json`;
 
     try {
       setLoadingPdf(true);
-      const [resJson, resMjml, resHtml] = await Promise.all([
+      const [resJson, resMjml, resHtml, resMeta] = await Promise.all([
         nativeIPC.readFile(jsonPath),
         nativeIPC.readFile(mjmlPath),
         nativeIPC.readFile(htmlPath),
+        nativeIPC.readFile(metaPath),
       ]);
+
+      if (resMeta.success && resMeta.content) {
+        try {
+          const metaObj = JSON.parse(resMeta.content);
+          if (metaObj.target_page) targetPage = Number(metaObj.target_page);
+          if (metaObj.email_width) emailWidth = Number(metaObj.email_width);
+        } catch {}
+      }
 
       if (resJson.success && resJson.content) {
         let totalPages = 1;
@@ -344,13 +512,16 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
       const file = files[0];
       if (file.name.endsWith(".pdf")) {
         setModalPdfPath(file.name);
+        const recent = getRecentProjectsFromStorage().find((p) => p.path === file.name);
+        const defaultPage = recent?.target_page || 1;
         try {
           const info = await nativeIPC.getPdfInfo(file.name);
           setTotalPages(info.total_pages || 1);
-          setSelectedPage(1);
+          setSelectedPage(defaultPage);
           setExtractSinglePage(true);
         } catch {
           setTotalPages(1);
+          setSelectedPage(defaultPage);
         }
       }
     }
@@ -365,11 +536,16 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
       if (file.name.endsWith(".pdf")) {
         setModalPdfPath(file.name);
         setShowPdfModal(true);
+        const recent = getRecentProjectsFromStorage().find((p) => p.path === file.name);
+        const defaultPage = recent?.target_page || 1;
         nativeIPC.getPdfInfo(file.name).then(info => {
           setTotalPages(info.total_pages || 1);
-          setSelectedPage(1);
+          setSelectedPage(defaultPage);
           setExtractSinglePage(true);
-        }).catch(() => setTotalPages(1));
+        }).catch(() => {
+          setTotalPages(1);
+          setSelectedPage(defaultPage);
+        });
       } else if (file.name.endsWith(".html") || file.name.endsWith(".htm")) {
         const reader = new FileReader();
         reader.onload = () => {
@@ -389,38 +565,38 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
           <span className="logo-text">NoCodeMail</span>
         </div>
 
-        {/* MJML Agent Header Button */}
+        {/* Select Project Header Button */}
         <button
           type="button"
-          onClick={handleOpenMjmlAgent}
-          onContextMenu={handleMjmlAgentContextMenu}
+          onClick={handleSelectProject}
+          disabled={loadingProject}
           style={{
             display: "flex",
             alignItems: "center",
             gap: "7px",
-            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
+            background: "linear-gradient(135deg, #0284c7, #2563eb)",
             color: "#ffffff",
             border: "none",
             borderRadius: "8px",
-            padding: "7px 14px",
+            padding: "7px 15px",
             fontSize: "12.5px",
             fontWeight: "700",
-            cursor: "pointer",
-            boxShadow: "0 2px 8px rgba(79, 70, 229, 0.3)",
+            cursor: loadingProject ? "wait" : "pointer",
+            boxShadow: "0 2px 10px rgba(37, 99, 235, 0.35)",
             transition: "all 0.15s ease",
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.transform = "translateY(-1px)";
-            e.currentTarget.style.boxShadow = "0 4px 14px rgba(79, 70, 229, 0.4)";
+            e.currentTarget.style.boxShadow = "0 4px 14px rgba(37, 99, 235, 0.45)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.transform = "none";
-            e.currentTarget.style.boxShadow = "0 2px 8px rgba(79, 70, 229, 0.3)";
+            e.currentTarget.style.boxShadow = "0 2px 10px rgba(37, 99, 235, 0.35)";
           }}
-          title="Left-click: Open MJML AI Agent | Right-click: Change Preferred Browser"
+          title="Select an already available project folder or email files from your file system"
         >
-          <Sparkles size={14} />
-          <span>MJML Agent</span>
+          <FolderKanban size={15} />
+          <span>{loadingProject ? "Inspecting..." : "Select Project"}</span>
           <ArrowRight size={13} />
         </button>
       </header>
@@ -1160,6 +1336,214 @@ export const Screen1Welcome: React.FC<Screen1Props> = ({ onPdfSelected, onHtmlLo
         onSelectBrowser={handleSelectAgentBrowser}
         currentBrowserPath={localStorage.getItem("nocodemail_agent_browser") || ""}
       />
+
+      {/* Invalid Project Structure Error Modal */}
+      {invalidProjectModal && invalidProjectModal.open && (
+        <div 
+          className="ios-modal-overlay" 
+          onClick={() => setInvalidProjectModal(null)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(15, 23, 42, 0.72)",
+            backdropFilter: "blur(12px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            animation: "fadeIn 0.2s ease-out"
+          }}
+        >
+          <div 
+            className="ios-modal-card" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "520px",
+              maxWidth: "92vw",
+              background: "#ffffff",
+              borderRadius: "18px",
+              boxShadow: "0 25px 60px -15px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(239, 68, 68, 0.2)",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: "20px 24px 16px",
+              borderBottom: "1px solid #f1f5f9",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "linear-gradient(180deg, #fef2f2 0%, #ffffff 100%)"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <div style={{
+                  width: "40px",
+                  height: "40px",
+                  borderRadius: "12px",
+                  background: "#fee2e2",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#ef4444",
+                  boxShadow: "0 2px 8px rgba(239, 68, 68, 0.2)"
+                }}>
+                  <AlertTriangle size={22} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                    Invalid Project Folder
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                    Required campaign files not detected
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setInvalidProjectModal(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  padding: "6px",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Path Display */}
+              {invalidProjectModal.dir && (
+                <div style={{
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "10px",
+                  padding: "10px 14px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                }}>
+                  <FolderOpen size={16} color="#64748b" style={{ flexShrink: 0 }} />
+                  <span style={{
+                    fontFamily: "monospace",
+                    fontSize: "12px",
+                    color: "#334155",
+                    wordBreak: "break-all",
+                    lineHeight: "1.4"
+                  }}>
+                    {invalidProjectModal.dir}
+                  </span>
+                </div>
+              )}
+
+              {/* Error Explanation */}
+              <div style={{ fontSize: "13px", color: "#475569", lineHeight: "1.5" }}>
+                {invalidProjectModal.error}
+              </div>
+
+              {/* Requirement Checklist */}
+              <div style={{
+                background: "#fdf2f2",
+                border: "1px solid #fecaca",
+                borderRadius: "10px",
+                padding: "12px 16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px"
+              }}>
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#991b1b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  A valid project requires at least one of:
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12.5px", color: "#7f1d1d" }}>
+                  <span style={{ color: "#ef4444", fontWeight: "bold" }}>•</span>
+                  <span><strong>HTML Email Template</strong> (<code>index.html</code> or <code>*.html</code>)</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12.5px", color: "#7f1d1d" }}>
+                  <span style={{ color: "#ef4444", fontWeight: "bold" }}>•</span>
+                  <span><strong>Design Extraction JSON</strong> (<code>*_design.json</code> or <code>design.json</code>)</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12.5px", color: "#7f1d1d" }}>
+                  <span style={{ color: "#ef4444", fontWeight: "bold" }}>•</span>
+                  <span><strong>MJML Template</strong> (<code>*.mjml</code>)</span>
+                </div>
+              </div>
+
+              {/* Files Found Summary (if any) */}
+              {invalidProjectModal.filesFound && invalidProjectModal.filesFound.length > 0 && (
+                <div style={{ fontSize: "12px", color: "#64748b" }}>
+                  <strong>Files detected in folder:</strong>{" "}
+                  <span style={{ color: "#475569" }}>
+                    {invalidProjectModal.filesFound.slice(0, 6).join(", ")}
+                    {invalidProjectModal.filesFound.length > 6 ? ` (+${invalidProjectModal.filesFound.length - 6} more)` : ""}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{
+              padding: "16px 24px",
+              background: "#f8fafc",
+              borderTop: "1px solid #f1f5f9",
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "10px"
+            }}>
+              <button
+                type="button"
+                onClick={() => setInvalidProjectModal(null)}
+                style={{
+                  padding: "9px 18px",
+                  borderRadius: "8px",
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
+                  color: "#475569",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInvalidProjectModal(null);
+                  setTimeout(() => handleSelectProject(), 100);
+                }}
+                style={{
+                  padding: "9px 20px",
+                  borderRadius: "8px",
+                  border: "none",
+                  background: "linear-gradient(135deg, #0284c7, #2563eb)",
+                  color: "#ffffff",
+                  fontSize: "13px",
+                  fontWeight: "700",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(37, 99, 235, 0.3)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px"
+                }}
+              >
+                <FolderOpen size={15} />
+                <span>Choose Another Folder</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

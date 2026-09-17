@@ -58,6 +58,23 @@ export interface FooterPreset {
   code: string;
 }
 
+export interface ProjectInspectionResult {
+  success: boolean;
+  package_dir?: string;
+  project_name?: string;
+  design_json_path?: string;
+  design_json?: string;
+  html_path?: string;
+  html_content?: string;
+  mjml_path?: string;
+  mjml_content?: string;
+  preview_image_path?: string;
+  has_assets?: boolean;
+  files_found?: string[];
+  checked_dir?: string;
+  error?: string;
+}
+
 declare global {
   interface Window {
     choosePdf?: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
@@ -73,6 +90,9 @@ declare global {
     copyAsset?: (args: { source_path: string; target_dir: string }) => Promise<{ success: boolean; new_relative_path?: string; new_filename?: string; new_full_path?: string; error?: string }>;
     getInstalledBrowsers?: () => Promise<{ success: boolean; browsers?: BrowserInfo[] }>;
     openInBrowser?: (args: { url?: string; path?: string; browser_path?: string }) => Promise<{ success: boolean; error?: string }>;
+    openFolder?: (args: { path: string }) => Promise<{ success: boolean; error?: string }>;
+    chooseProject?: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
+    inspectProject?: (args: { path: string }) => Promise<ProjectInspectionResult>;
   }
 }
 
@@ -284,6 +304,45 @@ export const nativeIPC = {
       return true;
     }
     return false;
+  },
+
+  async openFolder(path: string): Promise<{ success: boolean; error?: string }> {
+    if (window.openFolder) {
+      return await window.openFolder({ path });
+    }
+    console.log("Mock open folder in FS:", path);
+    return { success: true };
+  },
+
+  async chooseProject(): Promise<{ success: boolean; path?: string; canceled?: boolean }> {
+    if (window.chooseProject) {
+      return await window.chooseProject();
+    }
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".html,.htm,.json,.mjml";
+      input.onchange = (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          resolve({ success: true, path: file.name });
+        } else {
+          resolve({ success: false, canceled: true });
+        }
+      };
+      input.click();
+    });
+  },
+
+  async inspectProject(path: string): Promise<ProjectInspectionResult> {
+    if (window.inspectProject) {
+      return await window.inspectProject({ path });
+    }
+    return {
+      success: false,
+      error: "IPC not available in browser mode",
+      checked_dir: path,
+    };
   },
 
   async fetchFooterPresets(endpointUrl = "http://10.215.56.196:9000/footer"): Promise<FooterPreset[]> {

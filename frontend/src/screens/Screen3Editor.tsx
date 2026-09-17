@@ -29,10 +29,13 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
-  ChevronUp
+  ChevronUp,
+  Eye,
+  Cloud
 } from "lucide-react";
 import { StyleInspector } from "../components/StyleInspector";
 import { EMAIL_COMPONENT_PRESETS } from "../components/ComponentPresets";
+import { DevicePreviewViewer } from "../components/DevicePreviewViewer";
 import { nativeIPC, BrowserInfo } from "../services/ipc";
 
 
@@ -68,6 +71,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 }) => {
   const [fileName, setFileName] = useState(initialFileName || "campaign_v2.html");
   const [isEditingName, setIsEditingName] = useState(false);
+  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [previewHtmlSnapshot, setPreviewHtmlSnapshot] = useState<string>("");
   const [viewMode, setViewMode] = useState<"desktop" | "mobile">("desktop");
   const [mobileWidth, setMobileWidth] = useState<number>(375);
   const [isResizingMobile, setIsResizingMobile] = useState<boolean>(false);
@@ -142,19 +147,147 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const PRODUCTION_STYLE_ID = "nocodemail-responsive-utilities";
   const PRODUCTION_STYLE_ATTR = "data-ncm-production-style";
   const PRODUCTION_RESPONSIVE_CSS = `
-@media only screen and (max-width: 480px) {
-  .mobile-align-left { text-align: left !important; }
-  .mobile-align-left table, .mobile-align-left img { margin-left: 0 !important; margin-right: auto !important; }
-  .mobile-align-center { text-align: center !important; }
-  .mobile-align-center table, .mobile-align-center img { margin-left: auto !important; margin-right: auto !important; }
-  .mobile-align-right { text-align: right !important; }
-  .mobile-align-right table, .mobile-align-right img { margin-left: auto !important; margin-right: 0 !important; }
-  .mobile-force-stack, .mobile-force-stack > [class*="mj-column"], .mobile-force-stack [class*="mj-column"] {
+@media only screen and (max-width: 490px) {
+  /* 1. Universal Mobile Align Center */
+  .mobile-align-center,
+  .mobile-align-center td,
+  .mobile-align-center p,
+  .mobile-align-center div,
+  .mobile-align-center span,
+  .mobile-align-center h1,
+  .mobile-align-center h2,
+  .mobile-align-center h3,
+  .mobile-align-center h4,
+  .mobile-align-center h5,
+  .mobile-align-center h6,
+  .mobile-align-center a,
+  .mobile-center-img,
+  .mobile-center-img td,
+  .mobile-center-img p,
+  .mobile-center-img div {
+    text-align: center !important;
+  }
+
+  .mobile-align-center table,
+  table.mobile-align-center,
+  .mobile-center-img table,
+  table.mobile-center-img {
+    margin: 0 auto !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    float: none !important;
+    display: table !important;
+  }
+
+  .mobile-align-center img,
+  img.mobile-align-center,
+  .mobile-center-img img,
+  img.mobile-center-img {
+    display: block !important;
+    margin: 0 auto !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    float: none !important;
+  }
+
+  .mobile-center-img a,
+  .mobile-align-center a {
+    display: inline-block !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    text-align: center !important;
+  }
+
+  /* 2. Universal Mobile Align Left */
+  .mobile-align-left,
+  .mobile-align-left td,
+  .mobile-align-left p,
+  .mobile-align-left div,
+  .mobile-align-left span,
+  .mobile-align-left h1,
+  .mobile-align-left h2,
+  .mobile-align-left h3,
+  .mobile-align-left h4,
+  .mobile-align-left h5,
+  .mobile-align-left h6,
+  .mobile-align-left a {
+    text-align: left !important;
+  }
+
+  .mobile-align-left table,
+  table.mobile-align-left {
+    margin: 0 auto 0 0 !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    float: none !important;
+    display: table !important;
+  }
+
+  .mobile-align-left img,
+  img.mobile-align-left {
+    display: block !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    float: none !important;
+  }
+
+  .mobile-align-left a {
+    display: inline-block !important;
+    text-align: left !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+  }
+
+  /* 3. Universal Mobile Align Right */
+  .mobile-align-right,
+  .mobile-align-right td,
+  .mobile-align-right p,
+  .mobile-align-right div,
+  .mobile-align-right span,
+  .mobile-align-right h1,
+  .mobile-align-right h2,
+  .mobile-align-right h3,
+  .mobile-align-right h4,
+  .mobile-align-right h5,
+  .mobile-align-right h6,
+  .mobile-align-right a {
+    text-align: right !important;
+  }
+
+  .mobile-align-right table,
+  table.mobile-align-right {
+    margin: 0 0 0 auto !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    float: none !important;
+    display: table !important;
+  }
+
+  .mobile-align-right img,
+  img.mobile-align-right {
+    display: block !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    float: none !important;
+  }
+
+  .mobile-align-right a {
+    display: inline-block !important;
+    text-align: right !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+  }
+
+  /* Multi-column stacking */
+  .mobile-force-stack,
+  .mobile-force-stack > [class*="mj-column"],
+  .mobile-force-stack [class*="mj-column"] {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
   }
-  .mobile-force-row > [class*="mj-column"], .mobile-force-row [class*="mj-column"] {
+  .mobile-force-row > [class*="mj-column"],
+  .mobile-force-row [class*="mj-column"] {
     display: inline-block !important;
     vertical-align: middle !important;
   }
@@ -207,6 +340,53 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const isInternalUpdateRef = useRef<boolean>(false);
   const hasInitSelectionRef = useRef<boolean>(false);
 
+  // Dynamic iframe height recalculation for exact pixel-fit scrolling in both Desktop and Mobile views
+  const recalcIframeHeight = useCallback(() => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!iframe || !doc || !doc.body) return;
+
+    const body = doc.body;
+    const bodyRect = body.getBoundingClientRect();
+
+    let maxContentBottom = 0;
+    const children = body.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i] as HTMLElement;
+      if (child.tagName === "SCRIPT" || child.tagName === "STYLE") continue;
+      const childRect = child.getBoundingClientRect();
+      const bottom = childRect.bottom - bodyRect.top;
+      if (bottom > maxContentBottom) {
+        maxContentBottom = bottom;
+      }
+    }
+
+    // Also check all direct section containers
+    const sections = body.querySelectorAll(".email-section-wrapper, [class*='mj-section'], table.mj-full-width-mobile, body > table, body > div");
+    sections.forEach((sec) => {
+      const rect = (sec as HTMLElement).getBoundingClientRect();
+      const bottom = rect.bottom - bodyRect.top;
+      if (bottom > maxContentBottom) {
+        maxContentBottom = bottom;
+      }
+    });
+
+    const finalHeight = Math.max(Math.ceil(maxContentBottom), 200);
+    iframe.style.height = `${finalHeight}px`;
+  }, []);
+
+  // Re-measure iframe height whenever viewMode, mobileWidth, or history changes
+  useEffect(() => {
+    recalcIframeHeight();
+    const timers = [
+      setTimeout(recalcIframeHeight, 50),
+      setTimeout(recalcIframeHeight, 150),
+      setTimeout(recalcIframeHeight, 300),
+      setTimeout(recalcIframeHeight, 500),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [viewMode, mobileWidth, historyIndex, recalcIframeHeight]);
+
   // Extract base URL for image resolution
   const getBaseUrl = useCallback(() => {
     if (!normalizedFolder) return "";
@@ -243,6 +423,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
   const [linkTargetBlank, setLinkTargetBlank] = useState(true);
   const [showColorPopover, setShowColorPopover] = useState(false);
   const [selectedTextColor, setSelectedTextColor] = useState("#151515");
+  const [showImageUrlPopover, setShowImageUrlPopover] = useState(false);
+  const [imageUrlInput, setImageUrlInput] = useState("");
   const floatingToolbarRef = useRef<HTMLDivElement>(null);
 
   const selectedDomElementRef = useRef<HTMLElement | null>(null);
@@ -273,11 +455,30 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     return stylesObj;
   };
 
-  const [inspectorTab, setInspectorTab] = useState<"components" | "styles">("components");
-  const inspectorTabRef = useRef<"components" | "styles">("components");
+  const [inspectorTab, setInspectorTab] = useState<"components" | "ai" | "styles">("components");
+  const inspectorTabRef = useRef<"components" | "ai" | "styles">("components");
   useEffect(() => {
     inspectorTabRef.current = inspectorTab;
   }, [inspectorTab]);
+
+  // Switch between desktop & mobile viewport, clearing any active floating toolbar and element selection
+  const handleSwitchViewMode = useCallback((mode: "desktop" | "mobile") => {
+    setViewMode(mode);
+    setFloatingToolbarPos(null);
+    setShowLinkPopover(false);
+    setShowColorPopover(false);
+    setShowImageUrlPopover(false);
+    const doc = emailIframeRef.current?.contentDocument;
+    if (doc) {
+      doc.querySelectorAll(".editor-active-selected").forEach((node) => {
+        (node as HTMLElement).classList.remove("editor-active-selected");
+      });
+    }
+    selectedDomElementRef.current = null;
+    setSelectedDomElement(null);
+    setSelectedTagName("div");
+    setInlineStyles({});
+  }, []);
 
   const [insertScope, setInsertScope] = useState<"column" | "section">("column");
   const insertScopeRef = useRef<"column" | "section">("column");
@@ -292,58 +493,38 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const isEditorRoot = (el: HTMLElement | null) =>
       !el || el === doc.body || el === doc.documentElement || el.classList?.contains("email-direct-dom-root");
 
+    // 1. Explicit section wrapper classes / attributes
     const explicit = target.closest(".email-section-wrapper, .mj-section, [data-email-section], [data-section]") as HTMLElement | null;
     if (explicit && !isEditorRoot(explicit)) return explicit;
 
+    // 2. Walk up from target and return the CLOSEST enclosing section container
     let node: HTMLElement | null = target;
-    let bestWidthWrapper: HTMLElement | null = null;
     while (node && !isEditorRoot(node)) {
-      const style = node.getAttribute("style") || "";
-      const widthAttr = node.getAttribute("width") || "";
-      const maxWidth = node.style.maxWidth || "";
-      const hasEmailWidth =
-        /(?:max-)?width\s*:\s*(?:[4-9]\d{2}|100%)px/i.test(style) ||
-        /(?:^|\D)(?:600|650|660|700)(?:px)?(?:\D|$)/.test(`${widthAttr} ${maxWidth}`);
-      const centeredBlock =
-        /margin\s*:\s*0(?:px)?\s+auto/i.test(style) ||
-        (node.style.marginLeft === "auto" && node.style.marginRight === "auto");
+      // Must not be a column or small inline element
+      const isColumn = node.classList.contains("mj-column") || /mj-column-per-/i.test(node.className);
+      if (!isColumn && (node.tagName === "DIV" || node.tagName === "SECTION" || node.tagName === "TABLE")) {
+        const style = node.getAttribute("style") || "";
+        const widthAttr = node.getAttribute("width") || "";
+        const maxWidth = node.style.maxWidth || "";
 
-      if ((node.tagName === "DIV" || node.tagName === "SECTION" || node.tagName === "TABLE") && (hasEmailWidth || centeredBlock)) {
-        bestWidthWrapper = node;
+        const hasEmailWidth =
+          /(?:max-)?width\s*:\s*(?:[4-9]\d{2}|100%)px/i.test(style) ||
+          /(?:^|\D)(?:500|550|600|620|640|650|660|700)(?:px)?(?:\D|$)/.test(`${widthAttr} ${maxWidth}`);
+        const centeredBlock =
+          /margin\s*:\s*0(?:px)?\s+auto/i.test(style) ||
+          (node.style.marginLeft === "auto" && node.style.marginRight === "auto");
+
+        // The closest centered container with email width encountered when walking up is the exact section
+        if (hasEmailWidth && centeredBlock) {
+          return node;
+        }
       }
       node = node.parentElement;
     }
-    if (bestWidthWrapper && !isEditorRoot(bestWidthWrapper)) return bestWidthWrapper;
 
-    const mjColumn = target.closest("[class*='mj-column']") as HTMLElement | null;
-    if (mjColumn) {
-      let rowHost: HTMLElement | null = mjColumn.parentElement;
-      while (rowHost && !isEditorRoot(rowHost)) {
-        if (rowHost.querySelectorAll(":scope > [class*='mj-column']").length > 1) {
-          const wrapper = rowHost.closest(".email-section-wrapper, [style*='max-width'], table[role='presentation']") as HTMLElement | null;
-          return wrapper && !isEditorRoot(wrapper) ? wrapper : rowHost;
-        }
-        rowHost = rowHost.parentElement;
-      }
-    }
-
-    const td = target.closest("td") as HTMLTableCellElement | null;
-    if (td) {
-      const row = td.closest("tr") as HTMLTableRowElement | null;
-      if (row && row.parentElement) {
-        let table = row.closest("table") as HTMLTableElement | null;
-        while (table && !isEditorRoot(table)) {
-          const tableWidth = table.getAttribute("width") || table.style.width || table.style.maxWidth || "";
-          const isContainer = /^(?:100%|[4-9]\d{2}(?:px)?)$/.test(tableWidth.trim()) || table.getAttribute("role") === "presentation";
-          if (isContainer) return table;
-          table = table.parentElement?.closest("table") as HTMLTableElement | null;
-        }
-        return row;
-      }
-    }
-
+    // 3. Fallback: walk up until reaching the top-level element under doc.body / root container
     let fallback: HTMLElement = target;
-    while (fallback.parentElement && !isEditorRoot(fallback.parentElement) && fallback.parentElement.parentElement !== doc.body) {
+    while (fallback.parentElement && !isEditorRoot(fallback.parentElement)) {
       fallback = fallback.parentElement;
     }
     return fallback;
@@ -356,8 +537,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     if (doc && (target === doc.body || target === doc.documentElement)) return;
 
     let finalTarget = target;
-    // In "New Section Row" mode, ALWAYS ensure we select the main outer section parent
-    if (insertScopeRef.current === "section" && inspectorTabRef.current === "components" && doc) {
+    // In "New Section Row" mode or AI mode, ALWAYS ensure we select the main outer section parent
+    const isSectionSelectionMode = (insertScopeRef.current === "section" && inspectorTabRef.current === "components") || inspectorTabRef.current === "ai";
+    if (isSectionSelectionMode && doc) {
       finalTarget = findSectionElement(target, doc);
     }
 
@@ -389,10 +571,22 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
   }, [findSectionElement, handleSelectElement]);
 
-  const handleTabChange = useCallback((tab: "components" | "styles") => {
+  const handleTabChange = useCallback((tab: "components" | "ai" | "styles") => {
     setInspectorTab(tab);
     inspectorTabRef.current = tab;
-  }, []);
+    const doc = emailIframeRef.current?.contentDocument;
+    if (tab === "ai" && selectedDomElementRef.current && doc) {
+      const section = findSectionElement(selectedDomElementRef.current, doc);
+      if (section) {
+        handleSelectElement(section);
+      }
+    } else if (tab === "components" && insertScopeRef.current === "section" && selectedDomElementRef.current && doc) {
+      const section = findSectionElement(selectedDomElementRef.current, doc);
+      if (section) {
+        handleSelectElement(section);
+      }
+    }
+  }, [findSectionElement, handleSelectElement]);
 
   const isSelectedSectionResponsive = useMemo(() => {
     if (!selectedDomElement) return true;
@@ -447,6 +641,61 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     removeEditorArtifactsFromClone(clone);
     return reverseEditorAssetUrls(clone.outerHTML);
   }, [removeEditorArtifactsFromClone, reverseEditorAssetUrls]);
+
+  const getAdjacentMsoCommentBefore = (element: HTMLElement): Comment | null => {
+    let prev = element.previousSibling;
+    while (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent?.trim()) {
+      prev = prev.previousSibling;
+    }
+    if (prev && prev.nodeType === Node.COMMENT_NODE && (prev.textContent || "").includes("[if mso")) {
+      return prev as Comment;
+    }
+    return null;
+  };
+
+  const getAdjacentMsoCommentAfter = (element: HTMLElement): Comment | null => {
+    let next = element.nextSibling;
+    while (next && next.nodeType === Node.TEXT_NODE && !next.textContent?.trim()) {
+      next = next.nextSibling;
+    }
+    if (next && next.nodeType === Node.COMMENT_NODE && (next.textContent || "").includes("[if mso")) {
+      return next as Comment;
+    }
+    return null;
+  };
+
+  const removeNodeAndPrecedingWhitespace = (node: Node) => {
+    const prev = node.previousSibling;
+    if (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent?.trim()) {
+      prev.parentNode?.removeChild(prev);
+    }
+    node.parentNode?.removeChild(node);
+  };
+
+  const removeNodeAndFollowingWhitespace = (node: Node) => {
+    const next = node.nextSibling;
+    if (next && next.nodeType === Node.TEXT_NODE && !next.textContent?.trim()) {
+      next.parentNode?.removeChild(next);
+    }
+    node.parentNode?.removeChild(node);
+  };
+
+  const serializeCleanSectionWithMso = useCallback((section: HTMLElement): string => {
+    const msoBefore = getAdjacentMsoCommentBefore(section);
+    const msoAfter = getAdjacentMsoCommentAfter(section);
+
+    const sectionHtml = serializeCleanElement(section);
+
+    let result = "";
+    if (msoBefore) {
+      result += `<!--${msoBefore.textContent}-->\n`;
+    }
+    result += sectionHtml;
+    if (msoAfter) {
+      result += `\n<!--${msoAfter.textContent}-->`;
+    }
+    return result;
+  }, [serializeCleanElement]);
 
   // Export clean HTML while preserving the document envelope and production responsive utilities.
   const exportPristineHtml = useCallback((): string => {
@@ -529,7 +778,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       }
     }
 
-    const ok = await writeClipboardText(serializeCleanElement(section));
+    const ok = await writeClipboardText(serializeCleanSectionWithMso(section));
     setSectionCopyStatus(ok ? "copied" : "error");
     if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
     copyFeedbackTimerRef.current = window.setTimeout(() => setSectionCopyStatus("idle"), 1800);
@@ -543,21 +792,24 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       }
     }
     return ok;
-  }, [getCopyableSection, serializeCleanElement, writeClipboardText]);
+  }, [getCopyableSection, serializeCleanSectionWithMso, writeClipboardText]);
 
   const ensureProductionUtilityStyle = useCallback((doc: Document) => {
-    if (!doc.head || doc.getElementById(PRODUCTION_STYLE_ID)) return;
-    const style = doc.createElement("style");
-    style.id = PRODUCTION_STYLE_ID;
-    style.setAttribute(PRODUCTION_STYLE_ATTR, "true");
+    if (!doc.head) return;
+    let style = doc.getElementById(PRODUCTION_STYLE_ID) as HTMLStyleElement | null;
+    if (!style) {
+      style = doc.createElement("style");
+      style.id = PRODUCTION_STYLE_ID;
+      style.setAttribute(PRODUCTION_STYLE_ATTR, "true");
+      doc.head.appendChild(style);
+    }
     style.textContent = PRODUCTION_RESPONSIVE_CSS;
-    doc.head.appendChild(style);
   }, [PRODUCTION_RESPONSIVE_CSS, PRODUCTION_STYLE_ATTR, PRODUCTION_STYLE_ID]);
 
   const isPermittedUrlValue = useCallback((value: string): boolean => {
     const raw = value.trim();
     if (!raw) return true;
-    if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(raw)) return true;
+    if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/|data:image\/)/i.test(raw)) return true;
     if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return false;
     return /^[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/.test(raw);
   }, []);
@@ -856,6 +1108,149 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     pushHistory(exportPristineHtml());
   }, [handleSelectElement, exportPristineHtml, pushHistory, makeTextElementsEditable, extractInnerWidget, findSectionElement]);
 
+  const selectedSectionHtml = useMemo(() => {
+    const section = getCopyableSection();
+    if (!section) return "";
+    return serializeCleanSectionWithMso(section);
+  }, [getCopyableSection, serializeCleanSectionWithMso, historyIndex]);
+
+  // Replace targeted section in-place with AI-generated HTML
+  const handleAiReplaceSection = useCallback((aiHtml: string): boolean => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    if (!doc || !doc.body || !selected) return false;
+
+    const targetSection = findSectionElement(selected, doc);
+    if (!targetSection || targetSection === doc.body || targetSection === doc.documentElement || !targetSection.parentElement) {
+      return false;
+    }
+
+    let cleaned = aiHtml.trim();
+    cleaned = cleaned.replace(/^```(?:html)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    if (!cleaned) return false;
+
+    const sanitized = sanitizeFragmentHtml(cleaned);
+    const temp = doc.createElement("div");
+    temp.innerHTML = sanitized;
+    if (!temp.firstElementChild && !temp.firstChild) return false;
+
+    const parent = targetSection.parentElement;
+
+    // Check if incoming AI snippet includes outer MSO comments
+    const hasIncomingMso = /<!--\s*\[if\s+mso/i.test(cleaned) || /\[if\s+mso/i.test(cleaned);
+
+    const msoBefore = getAdjacentMsoCommentBefore(targetSection);
+    const msoAfter = getAdjacentMsoCommentAfter(targetSection);
+
+    // If incoming HTML provides its own MSO envelope, remove old outer MSO comments to avoid duplicate MSO tables
+    if (hasIncomingMso) {
+      if (msoBefore && msoBefore.parentElement === parent) {
+        removeNodeAndPrecedingWhitespace(msoBefore);
+      }
+      if (msoAfter && msoAfter.parentElement === parent) {
+        removeNodeAndFollowingWhitespace(msoAfter);
+      }
+    }
+
+    const insertedNodes: HTMLElement[] = [];
+    while (temp.firstChild) {
+      const child = temp.firstChild;
+      if (child.nodeType === 1) {
+        insertedNodes.push(child as HTMLElement);
+      }
+      parent.insertBefore(child, targetSection);
+    }
+
+    targetSection.remove();
+    makeTextElementsEditable(doc.body);
+
+    if (insertedNodes.length > 0) {
+      handleSelectElement(insertedNodes[0]);
+    }
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+    return true;
+  }, [findSectionElement, sanitizeFragmentHtml, makeTextElementsEditable, handleSelectElement, exportPristineHtml, pushHistory, selectedDomElement]);
+
+  // Insert AI-generated section above or below the current section
+  const handleAiInsertSection = useCallback((aiHtml: string, position: "below" | "above" = "below"): boolean => {
+    const iframe = emailIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) return false;
+
+    const selected = selectedDomElementRef.current || selectedDomElement;
+    let targetSection = selected ? findSectionElement(selected, doc) : null;
+    if (targetSection === doc.body || targetSection === doc.documentElement) {
+      targetSection = null;
+    }
+
+    let cleaned = aiHtml.trim();
+    cleaned = cleaned.replace(/^```(?:html)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    if (!cleaned) return false;
+
+    const sanitized = sanitizeFragmentHtml(cleaned);
+    const temp = doc.createElement("div");
+    temp.innerHTML = sanitized;
+    if (!temp.firstElementChild && !temp.firstChild) return false;
+
+    const insertedNodes: HTMLElement[] = [];
+    const container = doc.querySelector(".container") || doc.querySelector(".mj-body") || doc.body;
+
+    if (targetSection && targetSection.parentElement) {
+      const parent = targetSection.parentElement;
+      if (position === "above") {
+        const msoBefore = getAdjacentMsoCommentBefore(targetSection);
+        const insertAnchor = (msoBefore && msoBefore.parentElement === parent) ? msoBefore : targetSection;
+        while (temp.firstChild) {
+          const child = temp.firstChild;
+          if (child.nodeType === 1) insertedNodes.push(child as HTMLElement);
+          parent.insertBefore(child, insertAnchor);
+        }
+      } else {
+        const msoAfter = getAdjacentMsoCommentAfter(targetSection);
+        const insertAnchor = (msoAfter && msoAfter.parentElement === parent) ? msoAfter.nextSibling : targetSection.nextSibling;
+        while (temp.firstChild) {
+          const child = temp.firstChild;
+          if (child.nodeType === 1) insertedNodes.push(child as HTMLElement);
+          parent.insertBefore(child, insertAnchor);
+        }
+      }
+    } else {
+      if (position === "above") {
+        const firstChild = container.firstElementChild;
+        while (temp.firstChild) {
+          const child = temp.firstChild;
+          if (child.nodeType === 1) insertedNodes.push(child as HTMLElement);
+          if (firstChild) {
+            container.insertBefore(child, firstChild);
+          } else {
+            container.appendChild(child);
+          }
+        }
+      } else {
+        while (temp.firstChild) {
+          const child = temp.firstChild;
+          if (child.nodeType === 1) insertedNodes.push(child as HTMLElement);
+          container.appendChild(child);
+        }
+      }
+    }
+
+    makeTextElementsEditable(doc.body);
+
+    if (insertedNodes.length > 0) {
+      handleSelectElement(insertedNodes[0]);
+    }
+
+    setIsSaved(false);
+    isInternalUpdateRef.current = true;
+    pushHistory(exportPristineHtml());
+    return true;
+  }, [findSectionElement, sanitizeFragmentHtml, makeTextElementsEditable, handleSelectElement, exportPristineHtml, pushHistory, selectedDomElement]);
+
   // Swap Left and Right columns in 2-column sections / cards
   const handleSwapColumns = useCallback(() => {
     const iframe = emailIframeRef.current;
@@ -925,7 +1320,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     }
   }, [exportPristineHtml, pushHistory, handleSelectElement, selectedDomElement]);
 
-  // Quick 1-click alignment for all text, buttons, and images in the active section or column
+  // Quick 1-click alignment for selected element or active section/column
   const handleQuickAlign = useCallback((align: "left" | "center" | "right") => {
     const iframe = emailIframeRef.current;
     const doc = iframe?.contentDocument;
@@ -934,106 +1329,208 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     const selected = selectedDomElementRef.current || selectedDomElement;
     if (!selected) return;
 
-    const targetScope = (selected.closest(".email-section-wrapper, [class*='mj-column'], td") as HTMLElement) || selected;
+    const isSectionOrColumn = selected.classList.contains("email-section-wrapper") || 
+      selected.matches("[class*='mj-column']") || 
+      selected.classList.contains("header-group");
 
     if (viewMode === "mobile") {
-      // Mobile-Aware Alignment (Applies responsive CSS classes so desktop styles are not overwritten or locked)
-      const mobileAlignClasses = ["mobile-align-left", "mobile-align-center", "mobile-align-right"];
+      // Mobile-Aware Alignment (Applies responsive CSS classes without altering desktop inline styles)
+      const mobileAlignClasses = ["mobile-align-left", "mobile-align-center", "mobile-align-right", "mobile-center-img"];
       const newClass = `mobile-align-${align}`;
 
-      mobileAlignClasses.forEach((c) => targetScope.classList.remove(c));
-      targetScope.classList.add(newClass);
-
-      if (selected !== targetScope) {
+      if (isSectionOrColumn) {
         mobileAlignClasses.forEach((c) => selected.classList.remove(c));
         selected.classList.add(newClass);
-      }
 
-      targetScope.querySelectorAll("table, img, div, p").forEach((n) => {
-        const el = n as HTMLElement;
-        mobileAlignClasses.forEach((c) => el.classList.remove(c));
-        el.classList.add(newClass);
-      });
-    } else {
-      // Desktop Alignment
-      // 1. Text elements
-      const textEls = targetScope.querySelectorAll("p, h1, h2, h3, h4, h5, h6, span, div:not([class*='mj-column']), td");
-      textEls.forEach((el) => {
-        const htmlEl = el as HTMLElement;
-        htmlEl.style.textAlign = align;
-        htmlEl.setAttribute("align", align);
-      });
-      if (["p", "h1", "h2", "h3", "h4", "h5", "h6", "span", "div", "td"].includes(targetScope.tagName.toLowerCase())) {
-        targetScope.style.textAlign = align;
-        targetScope.setAttribute("align", align);
-      }
-
-      // 2. Buttons and Tables
-      const tables = targetScope.querySelectorAll("table");
-      tables.forEach((tbl) => {
-        const tableEl = tbl as HTMLElement;
-        tableEl.setAttribute("align", align);
-        if (align === "left") {
-          tableEl.style.marginLeft = "0";
-          tableEl.style.marginRight = "auto";
-        } else if (align === "center") {
-          tableEl.style.marginLeft = "auto";
-          tableEl.style.marginRight = "auto";
-        } else if (align === "right") {
-          tableEl.style.marginLeft = "auto";
-          tableEl.style.marginRight = "0";
-        }
-      });
-
-      // 3. Images and their parent tables/cells/divs
-      const imgs = targetScope.tagName.toLowerCase() === "img" ? [targetScope] : Array.from(targetScope.querySelectorAll("img"));
-      imgs.forEach((img) => {
-        const imgEl = img as HTMLElement;
-        imgEl.style.display = "block";
-        imgEl.setAttribute("align", align);
-        if (align === "left") {
-          imgEl.style.marginLeft = "0";
-          imgEl.style.marginRight = "auto";
-        } else if (align === "center") {
-          imgEl.style.marginLeft = "auto";
-          imgEl.style.marginRight = "auto";
-        } else if (align === "right") {
-          imgEl.style.marginLeft = "auto";
-          imgEl.style.marginRight = "0";
-        }
-
-        // Also align parent table, td, and div wrapper for bulletproof email rendering
-        let p: HTMLElement | null = imgEl.parentElement;
-        while (p && p !== targetScope.parentElement && p !== doc.body) {
-          if (p.tagName === "TD" || p.tagName === "DIV") {
-            p.style.textAlign = align;
-            p.setAttribute("align", align);
+        selected.querySelectorAll("table, img, div, p, a, h1, h2, h3, h4, h5, h6, td").forEach((n) => {
+          const el = n as HTMLElement;
+          mobileAlignClasses.forEach((c) => el.classList.remove(c));
+          if (el.tagName === "IMG" && align === "center") {
+            el.classList.add("mobile-center-img");
           }
-          if (p.tagName === "TABLE") {
-            p.setAttribute("align", align);
+          el.classList.add(newClass);
+        });
+      } else {
+        // Individual Element Scope
+        const tag = selected.tagName.toLowerCase();
+        const imgEl = (tag === "img" ? selected : selected.querySelector("img")) as HTMLElement | null;
+        if (imgEl) {
+          let cell = imgEl.closest("td") as HTMLElement | null;
+          const tableWrapper = imgEl.closest("table") as HTMLElement | null;
+          if (cell && tableWrapper && cell.closest("table") === tableWrapper && tableWrapper.parentElement?.tagName === "TD") {
+            cell = tableWrapper.parentElement as HTMLElement;
+          }
+
+          const targets = [selected, imgEl, imgEl.parentElement, tableWrapper, cell].filter(Boolean) as HTMLElement[];
+          targets.forEach((el) => {
+            mobileAlignClasses.forEach((c) => el.classList.remove(c));
+            el.classList.add(newClass);
+            if (align === "center") {
+              el.classList.add("mobile-center-img");
+            }
+          });
+
+          // Also check enclosing column div if found
+          let p: HTMLElement | null = (cell || imgEl).parentElement;
+          while (p && p !== doc.body && !p.classList.contains("email-section-wrapper")) {
+            if (p.matches("[class*='mj-column']") || p.classList.contains("header-col") || p.classList.contains("logo-container")) {
+              mobileAlignClasses.forEach((c) => p?.classList.remove(c));
+              p.classList.add(newClass);
+              if (align === "center") {
+                p.classList.add("mobile-center-img");
+              }
+              break;
+            }
+            p = p.parentElement;
+          }
+        } else {
+          mobileAlignClasses.forEach((c) => selected.classList.remove(c));
+          selected.classList.add(newClass);
+
+          // Also ensure parent block / column knows about mobile alignment if needed
+          let p: HTMLElement | null = selected.parentElement;
+          while (p && p !== doc.body && !p.classList.contains("email-section-wrapper")) {
+            if (p.classList.contains("header-col") || p.classList.contains("logo-container") || p.tagName === "TD" || p.matches("[class*='mj-column']")) {
+              mobileAlignClasses.forEach((c) => p?.classList.remove(c));
+              p.classList.add(newClass);
+              break;
+            }
+            p = p.parentElement;
+          }
+        }
+      }
+    } else {
+      // Desktop Alignment (Updates standard inline styles, attributes, and image margins)
+      if (isSectionOrColumn) {
+        // 1. Text elements inside section/column
+        const textEls = selected.querySelectorAll("p, h1, h2, h3, h4, h5, h6, span, div:not([class*='mj-column']), td");
+        textEls.forEach((el) => {
+          const htmlEl = el as HTMLElement;
+          htmlEl.style.textAlign = align;
+          htmlEl.setAttribute("align", align);
+        });
+
+        // 2. Buttons and Tables inside section/column
+        const tables = selected.querySelectorAll("table");
+        tables.forEach((tbl) => {
+          const tableEl = tbl as HTMLElement;
+          tableEl.setAttribute("align", align);
+          if (align === "left") {
+            tableEl.style.marginLeft = "0px";
+            tableEl.style.marginRight = "auto";
+          } else if (align === "center") {
+            tableEl.style.marginLeft = "auto";
+            tableEl.style.marginRight = "auto";
+          } else if (align === "right") {
+            tableEl.style.marginLeft = "auto";
+            tableEl.style.marginRight = "0px";
+          }
+        });
+
+        // 3. Images inside section/column
+        const imgs = Array.from(selected.querySelectorAll("img"));
+        imgs.forEach((img) => {
+          const imgEl = img as HTMLElement;
+          imgEl.style.display = "block";
+          imgEl.setAttribute("align", align);
+          if (align === "left") {
+            imgEl.style.marginLeft = "0px";
+            imgEl.style.marginRight = "auto";
+          } else if (align === "center") {
+            imgEl.style.marginLeft = "auto";
+            imgEl.style.marginRight = "auto";
+          } else if (align === "right") {
+            imgEl.style.marginLeft = "auto";
+            imgEl.style.marginRight = "0px";
+          }
+        });
+      } else {
+        // Individual Element Scope
+        const tag = selected.tagName.toLowerCase();
+
+        if (tag === "img") {
+          const imgEl = selected as HTMLElement;
+          imgEl.setAttribute("align", align);
+          imgEl.style.display = "block";
+
+          // Find the outer image cell (the TD containing the image/table in MJML)
+          let cell = imgEl.closest("td") as HTMLElement | null;
+          const tableWrapper = imgEl.closest("table") as HTMLElement | null;
+
+          if (cell && tableWrapper && cell.closest("table") === tableWrapper && tableWrapper.parentElement?.tagName === "TD") {
+            cell = tableWrapper.parentElement as HTMLElement;
+          }
+
+          if (cell) {
+            cell.setAttribute("align", align);
+            cell.style.textAlign = align;
+          }
+
+          if (tableWrapper) {
+            tableWrapper.setAttribute("align", align);
             if (align === "left") {
-              p.style.marginLeft = "0";
-              p.style.marginRight = "auto";
+              tableWrapper.style.marginLeft = "0px";
+              tableWrapper.style.marginRight = "auto";
             } else if (align === "center") {
-              p.style.marginLeft = "auto";
-              p.style.marginRight = "auto";
+              tableWrapper.style.marginLeft = "auto";
+              tableWrapper.style.marginRight = "auto";
             } else if (align === "right") {
-              p.style.marginLeft = "auto";
-              p.style.marginRight = "0";
+              tableWrapper.style.marginLeft = "auto";
+              tableWrapper.style.marginRight = "0px";
             }
           }
-          p = p.parentElement;
+
+          if (align === "left") {
+            imgEl.style.marginLeft = "0px";
+            imgEl.style.marginRight = "auto";
+          } else if (align === "center") {
+            imgEl.style.marginLeft = "auto";
+            imgEl.style.marginRight = "auto";
+          } else if (align === "right") {
+            imgEl.style.marginLeft = "auto";
+            imgEl.style.marginRight = "0px";
+          }
+        } else if (tag === "table") {
+          const tbl = selected as HTMLElement;
+          tbl.setAttribute("align", align);
+          if (align === "left") {
+            tbl.style.marginLeft = "0px";
+            tbl.style.marginRight = "auto";
+          } else if (align === "center") {
+            tbl.style.marginLeft = "auto";
+            tbl.style.marginRight = "auto";
+          } else if (align === "right") {
+            tbl.style.marginLeft = "auto";
+            tbl.style.marginRight = "0px";
+          }
+          tbl.querySelectorAll("td, p, a, div").forEach((n) => {
+            const el = n as HTMLElement;
+            el.style.textAlign = align;
+            el.setAttribute("align", align);
+          });
+        } else {
+          // Text element (p, h1-h6, span, a, div, td, etc.)
+          selected.style.textAlign = align;
+          selected.setAttribute("align", align);
+
+          // If inline element (span, a, strong, etc.), also align the enclosing block element
+          const parentBlock = selected.closest("p, h1, h2, h3, h4, h5, h6, td, div:not([class*='mj-column'])") as HTMLElement | null;
+          if (parentBlock && parentBlock !== selected) {
+            parentBlock.style.textAlign = align;
+            parentBlock.setAttribute("align", align);
+          }
         }
-      });
+      }
     }
 
+    ensureProductionUtilityStyle(doc);
     setIsSaved(false);
     isInternalUpdateRef.current = true;
     pushHistory(exportPristineHtml());
     if (selected) {
       setInlineStyles(extractElementStyles(selected));
     }
-  }, [exportPristineHtml, pushHistory, extractElementStyles, selectedDomElement, viewMode]);
+  }, [exportPristineHtml, pushHistory, extractElementStyles, ensureProductionUtilityStyle, selectedDomElement, viewMode]);
 
   // Vertical Alignment: Top, Middle (Center), Bottom
   const handleVerticalAlign = useCallback((valign: "top" | "middle" | "bottom") => {
@@ -1244,6 +1741,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         setFloatingToolbarPos(null);
         setShowLinkPopover(false);
         setShowColorPopover(false);
+        setShowImageUrlPopover(false);
         setActiveLinkNode(null);
         return;
       }
@@ -1268,6 +1766,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         const leftPos = Math.max(10, Math.min(window.innerWidth - 360, iframeRect.left + rect.left + rect.width / 2 - 170));
         setFloatingToolbarPos({ top: topPos, left: leftPos });
 
+        const currentSrc = target.getAttribute("src") || "";
+        setImageUrlInput(currentSrc);
+
         const imgLink = target.closest("a") as HTMLAnchorElement | null;
         setActiveLinkNode(imgLink);
         if (imgLink) {
@@ -1279,8 +1780,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         }
       }
 
-      // If in "New Section Row" mode, selecting any component selects the outer section parent
-      if (inspectorTabRef.current === "components" && insertScopeRef.current === "section") {
+      // If in "New Section Row" mode or "AI" mode, selecting any component selects the outer section parent
+      if ((inspectorTabRef.current === "components" && insertScopeRef.current === "section") || inspectorTabRef.current === "ai") {
         const sectionTarget = findSectionElement(target, doc);
         handleSelectElement(sectionTarget);
       } else {
@@ -1353,6 +1854,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         setFloatingToolbarPos(null);
         setShowLinkPopover(false);
         setShowColorPopover(false);
+        setShowImageUrlPopover(false);
         setActiveLinkNode(null);
         return;
       }
@@ -1553,22 +2055,17 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
     doc.head?.appendChild(editorStyle);
 
     // Auto-adjust iframe height to email content so no inner scrollbar appears
-    const updateIframeHeight = () => {
-      if (iframe && doc && doc.documentElement) {
-        const h = Math.max(doc.documentElement.offsetHeight, doc.body ? doc.body.offsetHeight : 0, 500);
-        iframe.style.height = `${h + 20}px`;
-      }
-    };
-    updateIframeHeight();
-    const heightTimer = window.setTimeout(updateIframeHeight, 150);
+    recalcIframeHeight();
+    const heightTimer = window.setTimeout(recalcIframeHeight, 150);
 
     // ResizeObserver watches content changes and updates iframe height dynamically.
     let resizeObserver: ResizeObserver | null = null;
     try {
       resizeObserver = new ResizeObserver(() => {
-        updateIframeHeight();
+        recalcIframeHeight();
       });
       if (doc.body) resizeObserver.observe(doc.body);
+      if (doc.documentElement) resizeObserver.observe(doc.documentElement);
     } catch {
       resizeObserver = null;
     }
@@ -1581,7 +2078,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       const el = node as HTMLElement;
       if (el.tagName.toLowerCase() === "img") {
         el.setAttribute("draggable", "false");
-        el.addEventListener("load", updateIframeHeight);
+        el.addEventListener("load", recalcIframeHeight);
       }
       if (editableTags.includes(el.tagName.toLowerCase())) {
         const hasBlockChildren = Array.from(el.children).some((c) =>
@@ -1677,7 +2174,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     const el = selectedDomElementRef.current || selectedDomElement;
     if (el) {
-      el.style.setProperty(prop, cleanVal, "important");
+      el.style.setProperty(prop, cleanVal);
       syncEmailAttributesForStyle(el, prop, cleanVal);
 
       setIsSaved(false);
@@ -1704,9 +2201,8 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
 
     const el = selectedDomElementRef.current || selectedDomElement;
     if (el) {
-      const priority = el.style.getPropertyPriority(oldProperty) || "important";
       el.style.removeProperty(oldProperty);
-      el.style.setProperty(nextProp, cleanVal, priority);
+      el.style.setProperty(nextProp, cleanVal);
       syncEmailAttributesForStyle(el, oldProperty, "", true);
       syncEmailAttributesForStyle(el, nextProp, cleanVal);
       setIsSaved(false);
@@ -1753,6 +2249,28 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
       console.error("Error replacing image:", err);
       setSaveError("Image replacement failed.");
     }
+  };
+
+  const handleApplyImageUrl = () => {
+    const cleanUrl = imageUrlInput.trim();
+    if (!cleanUrl) {
+      setShowImageUrlPopover(false);
+      return;
+    }
+    const el = selectedDomElementRef.current || selectedDomElement;
+    if (!el) {
+      setShowImageUrlPopover(false);
+      return;
+    }
+    const imgEl = el.tagName.toLowerCase() === "img" ? el : el.querySelector("img");
+    if (imgEl) {
+      imgEl.setAttribute("src", cleanUrl);
+      (imgEl as HTMLImageElement).src = cleanUrl;
+      setIsSaved(false);
+      isInternalUpdateRef.current = true;
+      pushHistory(exportPristineHtml());
+    }
+    setShowImageUrlPopover(false);
   };
 
   const handleUpdateAttribute = (el: HTMLElement, attr: string, value: string) => {
@@ -2114,9 +2632,229 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           </div>
         </div>
 
-        {/* Center Controls: Viewport Mode, Width, Undo/Redo */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
-          {/* Segmented Viewport Switcher */}
+        {/* Center Controls: Viewport Mode, Width, Undo/Redo (Hidden in Preview Mode) */}
+        {editorMode === "edit" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+            {/* Segmented Viewport Switcher */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                background: "#f1f5f9",
+                padding: "2px",
+                borderRadius: "7px",
+                border: "1px solid #e2e8f0",
+                gap: "2px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => handleSwitchViewMode("desktop")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "5px",
+                  fontSize: "11.5px",
+                  fontWeight: viewMode === "desktop" ? "700" : "600",
+                  background: viewMode === "desktop" ? "#ffffff" : "transparent",
+                  color: viewMode === "desktop" ? "#4f46e5" : "#64748b",
+                  border: "none",
+                  cursor: "pointer",
+                  boxShadow: viewMode === "desktop" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                  transition: "all 0.12s ease",
+                }}
+              >
+                <Monitor size={13} />
+                <span>Desktop</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSwitchViewMode("mobile")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  padding: "4px 9px",
+                  borderRadius: "5px",
+                  fontSize: "11.5px",
+                  fontWeight: viewMode === "mobile" ? "700" : "600",
+                  background: viewMode === "mobile" ? "#ffffff" : "transparent",
+                  color: viewMode === "mobile" ? "#4f46e5" : "#64748b",
+                  border: "none",
+                  cursor: "pointer",
+                  boxShadow: viewMode === "mobile" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                  transition: "all 0.12s ease",
+                }}
+              >
+                <Smartphone size={13} />
+                <span>Mobile</span>
+              </button>
+            </div>
+
+            {/* Width Control: Range Slider for Mobile (320px - 490px) or Static Pill for Desktop */}
+            {viewMode === "mobile" ? (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "3px 8px",
+                  borderRadius: "6px",
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                }}
+              >
+                <span style={{ fontSize: "11px", fontWeight: "700", color: "#4f46e5", minWidth: "40px", textAlign: "center" }}>
+                  {mobileWidth}px
+                </span>
+                <input
+                  type="range"
+                  min="320"
+                  max="490"
+                  step="1"
+                  value={mobileWidth}
+                  onChange={(e) => setMobileWidth(Number(e.target.value))}
+                  style={{
+                    width: "80px",
+                    accentColor: "#4f46e5",
+                    cursor: "pointer",
+                    height: "4px",
+                  }}
+                  title="Slide to resize mobile view (320px - 490px)"
+                />
+                <button
+                  type="button"
+                  onClick={() => setMobileWidth(375)}
+                  title="Reset to 375px default (iPhone/Mobile)"
+                  style={{
+                    fontSize: "10px",
+                    fontWeight: "700",
+                    padding: "1px 5px",
+                    borderRadius: "3px",
+                    border: "1px solid #cbd5e1",
+                    background: mobileWidth === 375 ? "#4f46e5" : "#ffffff",
+                    color: mobileWidth === 375 ? "#ffffff" : "#64748b",
+                    cursor: "pointer",
+                  }}
+                >
+                  375
+                </button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "4px 8px",
+                  borderRadius: "6px",
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  fontSize: "11.5px",
+                  fontWeight: "600",
+                  color: "#475569",
+                }}
+              >
+                <span>700px</span>
+              </div>
+            )}
+
+            {/* Undo / Redo */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                background: "#f1f5f9",
+                padding: "2px",
+                borderRadius: "6px",
+                border: "1px solid #e2e8f0",
+                gap: "1px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={historyIndex === 0}
+                title="Undo (Ctrl+Z)"
+                style={{
+                  padding: "3px 6px",
+                  borderRadius: "4px",
+                  border: "none",
+                  background: "transparent",
+                  color: historyIndex === 0 ? "#cbd5e1" : "#475569",
+                  cursor: historyIndex === 0 ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                <Undo2 size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={historyIndex === history.length - 1}
+                title="Redo (Ctrl+Y)"
+                style={{
+                  padding: "3px 6px",
+                  borderRadius: "4px",
+                  border: "none",
+                  background: "transparent",
+                  color: historyIndex === history.length - 1 ? "#cbd5e1" : "#475569",
+                  cursor: historyIndex === history.length - 1 ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                <Redo2 size={13} />
+              </button>
+            </div>
+
+            {/* Save Status Indicator & Button (Placed right side of Undo/Redo) */}
+            <button
+              type="button"
+              onClick={handleSave}
+              title={isSaved ? "All changes saved" : "Click to save changes (Ctrl+S)"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "4px 8px",
+                borderRadius: "6px",
+                background: isSaved ? "#f0fdf4" : "#fffbeb",
+                border: isSaved ? "1px solid #bbf7d0" : "1px solid #fde68a",
+                color: isSaved ? "#15803d" : "#b45309",
+                fontSize: "11px",
+                fontWeight: "700",
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+            >
+              <span
+                style={{
+                  width: "6px",
+                  height: "6px",
+                  borderRadius: "50%",
+                  background: isSaved ? "#22c55e" : "#f59e0b",
+                }}
+              ></span>
+              <span>{isSaved ? "Saved" : "Save*"}</span>
+            </button>
+
+            {saveError && (
+              <span role="status" style={{ fontSize: "10.5px", fontWeight: 700, color: "#dc2626", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
+                {saveError}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div style={{ flex: 1 }} />
+        )}
+
+        {/* Right Controls: Edit/Preview Toggle, Browser Dropdown, Code View */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+          {/* Edit / Preview Segmented Switcher */}
           <div
             style={{
               display: "flex",
@@ -2130,7 +2868,13 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
           >
             <button
               type="button"
-              onClick={() => setViewMode("desktop")}
+              onClick={() => {
+                setEditorMode("edit");
+                setTimeout(() => {
+                  recalcIframeHeight();
+                }, 50);
+              }}
+              title="Visual Email Editor"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -2138,21 +2882,26 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                 padding: "4px 9px",
                 borderRadius: "5px",
                 fontSize: "11.5px",
-                fontWeight: viewMode === "desktop" ? "700" : "600",
-                background: viewMode === "desktop" ? "#ffffff" : "transparent",
-                color: viewMode === "desktop" ? "#4f46e5" : "#64748b",
+                fontWeight: editorMode === "edit" ? "700" : "600",
+                background: editorMode === "edit" ? "#ffffff" : "transparent",
+                color: editorMode === "edit" ? "#4f46e5" : "#64748b",
                 border: "none",
                 cursor: "pointer",
-                boxShadow: viewMode === "desktop" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                boxShadow: editorMode === "edit" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
                 transition: "all 0.12s ease",
               }}
             >
-              <Monitor size={13} />
-              <span>Desktop</span>
+              <Pencil size={12} />
+              <span>Edit</span>
             </button>
             <button
               type="button"
-              onClick={() => setViewMode("mobile")}
+              onClick={() => {
+                const liveHtml = exportPristineHtml();
+                setPreviewHtmlSnapshot(liveHtml || historyRef.current[historyIndexRef.current] || startHtml);
+                setEditorMode("preview");
+              }}
+              title="Preview on Email on Acid & Mailgun Inspect Devices"
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -2160,177 +2909,19 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                 padding: "4px 9px",
                 borderRadius: "5px",
                 fontSize: "11.5px",
-                fontWeight: viewMode === "mobile" ? "700" : "600",
-                background: viewMode === "mobile" ? "#ffffff" : "transparent",
-                color: viewMode === "mobile" ? "#4f46e5" : "#64748b",
+                fontWeight: editorMode === "preview" ? "700" : "600",
+                background: editorMode === "preview" ? "#ffffff" : "transparent",
+                color: editorMode === "preview" ? "#4f46e5" : "#64748b",
                 border: "none",
                 cursor: "pointer",
-                boxShadow: viewMode === "mobile" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
+                boxShadow: editorMode === "preview" ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
                 transition: "all 0.12s ease",
               }}
             >
-              <Smartphone size={13} />
-              <span>Mobile</span>
+              <Eye size={12} />
+              <span>Preview</span>
             </button>
           </div>
-
-          {/* Width Control: Range Slider for Mobile (320px - 490px) or Static Pill for Desktop */}
-          {viewMode === "mobile" ? (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "3px 8px",
-                borderRadius: "6px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-              }}
-            >
-              <span style={{ fontSize: "11px", fontWeight: "700", color: "#4f46e5", minWidth: "40px", textAlign: "center" }}>
-                {mobileWidth}px
-              </span>
-              <input
-                type="range"
-                min="320"
-                max="490"
-                step="1"
-                value={mobileWidth}
-                onChange={(e) => setMobileWidth(Number(e.target.value))}
-                style={{
-                  width: "80px",
-                  accentColor: "#4f46e5",
-                  cursor: "pointer",
-                  height: "4px",
-                }}
-                title="Slide to resize mobile view (320px - 490px)"
-              />
-              <button
-                type="button"
-                onClick={() => setMobileWidth(375)}
-                title="Reset to 375px default (iPhone/Mobile)"
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  padding: "1px 5px",
-                  borderRadius: "3px",
-                  border: "1px solid #cbd5e1",
-                  background: mobileWidth === 375 ? "#4f46e5" : "#ffffff",
-                  color: mobileWidth === 375 ? "#ffffff" : "#64748b",
-                  cursor: "pointer",
-                }}
-              >
-                375
-              </button>
-            </div>
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-                padding: "4px 8px",
-                borderRadius: "6px",
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-                fontSize: "11.5px",
-                fontWeight: "600",
-                color: "#475569",
-              }}
-            >
-              <span>700px</span>
-            </div>
-          )}
-
-          {/* Undo / Redo */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              background: "#f1f5f9",
-              padding: "2px",
-              borderRadius: "6px",
-              border: "1px solid #e2e8f0",
-              gap: "1px",
-            }}
-          >
-            <button
-              type="button"
-              onClick={handleUndo}
-              disabled={historyIndex === 0}
-              title="Undo (Ctrl+Z)"
-              style={{
-                padding: "3px 6px",
-                borderRadius: "4px",
-                border: "none",
-                background: "transparent",
-                color: historyIndex === 0 ? "#cbd5e1" : "#475569",
-                cursor: historyIndex === 0 ? "not-allowed" : "pointer",
-                display: "flex",
-                alignItems: "center",
-              }}
-            >
-              <Undo2 size={13} />
-            </button>
-            <button
-              type="button"
-              onClick={handleRedo}
-              disabled={historyIndex === history.length - 1}
-              title="Redo (Ctrl+Y)"
-              style={{
-                padding: "3px 6px",
-                borderRadius: "4px",
-                border: "none",
-                background: "transparent",
-                color: historyIndex === history.length - 1 ? "#cbd5e1" : "#475569",
-                cursor: historyIndex === history.length - 1 ? "not-allowed" : "pointer",
-                display: "flex",
-                alignItems: "center",
-              }}
-            >
-              <Redo2 size={13} />
-            </button>
-          </div>
-        </div>
-
-        {/* Right Controls: Save Status, Browser Dropdown, Code View & Export */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-          {/* Save Status Indicator */}
-          <button
-            type="button"
-            onClick={handleSave}
-            title={isSaved ? "All changes saved" : "Click to save changes"}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-              padding: "4px 8px",
-              borderRadius: "6px",
-              background: isSaved ? "#f0fdf4" : "#fffbeb",
-              border: isSaved ? "1px solid #bbf7d0" : "1px solid #fde68a",
-              color: isSaved ? "#15803d" : "#b45309",
-              fontSize: "11px",
-              fontWeight: "700",
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <span
-              style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                background: isSaved ? "#22c55e" : "#f59e0b",
-              }}
-            ></span>
-            <span>{isSaved ? "Saved" : "Save*"}</span>
-          </button>
-
-          {saveError && (
-            <span role="status" style={{ fontSize: "10.5px", fontWeight: 700, color: "#dc2626", maxWidth: "190px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={saveError}>
-              {saveError}
-            </span>
-          )}
 
           <div style={{ width: "1px", height: "18px", background: "#e2e8f0" }}></div>
 
@@ -2481,38 +3072,36 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             <Code2 size={13} color="#475569" />
             <span>Code</span>
           </button>
-
-          {/* Export HTML Primary Button (Hidden per user request) */}
-          <button
-            type="button"
-            onClick={handleSave}
-            title="Export Clean HTML"
-            style={{
-              display: "none",
-              alignItems: "center",
-              gap: "5px",
-              padding: "5px 12px",
-              borderRadius: "7px",
-              background: "linear-gradient(135deg, #4f46e5, #6366f1)",
-              border: "none",
-              color: "#ffffff",
-              cursor: "pointer",
-              fontWeight: "700",
-              fontSize: "11.5px",
-              height: "31px",
-              boxShadow: "0 2px 6px rgba(79, 70, 229, 0.25)",
-              transition: "all 0.12s ease",
-            }}
-          >
-            <FileDown size={13} color="#ffffff" />
-            <span>Export HTML</span>
-          </button>
         </div>
       </header>
 
+      {/* Device Preview Viewer (Mailgun Inspect / Email on Acid) */}
+      <div
+        style={{
+          display: editorMode === "preview" ? "flex" : "none",
+          flex: 1,
+          minHeight: 0,
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <DevicePreviewViewer
+          htmlContent={previewHtmlSnapshot || historyRef.current[historyIndexRef.current] || startHtml}
+          emailSubject={fileName}
+          pdfName={fileName || initialFileName}
+          pkgPrefix={pkgPrefix}
+        />
+      </div>
 
-      {/* Main Workspace: Split Canvas & Inspector */}
-      <div className="editor-workspace">
+      {/* Main Visual Editor Workspace — Always Preserved in DOM */}
+      <div
+        className="editor-workspace"
+        style={{
+          display: editorMode === "edit" ? "flex" : "none",
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
         {/* Left / Center Canvas Area */}
         <div className="canvas-scroll-area" ref={canvasContainerRef} style={{ position: "relative" }}>
           <div className="canvas-width-indicator" style={{ width: canvasWidth, transition: isResizingMobile ? "none" : "width 0.28s cubic-bezier(0.4, 0, 0.2, 1)" }}>
@@ -2526,12 +3115,12 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             className="email-iframe-wrapper"
             style={{ 
               width: canvasWidth, 
-              minHeight: "450px", 
+              minHeight: "200px", 
               position: "relative",
               borderRadius: "8px",
               boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08)",
               background: "#ffffff",
-              marginBottom: "60px",
+              marginBottom: "32px",
               transition: isResizingMobile ? "none" : "width 0.28s cubic-bezier(0.4, 0, 0.2, 1)",
             }}
           >
@@ -2543,7 +3132,7 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
               scrolling="no"
               style={{
                 width: "100%",
-                minHeight: "500px",
+                minHeight: "200px",
                 border: "none",
                 display: "block",
                 backgroundColor: "#ffffff",
@@ -2554,344 +3143,119 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
         </div>
 
         {/* Floating Contextual Formatting Toolbar */}
-        {floatingToolbarPos && (
-          <div
-            ref={floatingToolbarRef}
-            className="floating-selection-toolbar"
-            style={{
-              position: "fixed",
-              top: `${floatingToolbarPos.top}px`,
-              left: `${floatingToolbarPos.left}px`,
-              background: "#1e293b",
-              borderRadius: "8px",
-              boxShadow: "0 6px 20px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)",
-              display: "flex",
-              alignItems: "center",
-              gap: "2px",
-              padding: "4px 6px",
-              zIndex: 9999,
-              userSelect: "none",
-              animation: "fadeIn 0.12s ease-out",
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {/* If selected element is an Image, show Image Floating Toolbar */}
-            {selectedDomElement?.tagName.toLowerCase() === "img" ? (
-              <>
-                {/* 1. Image Link / Edit Link */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowColorPopover(false);
-                    setShowLinkPopover(!showLinkPopover);
-                  }}
-                  title={activeLinkNode ? "Edit Image Link" : "Add Link to Image"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    padding: "5px 8px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                    transition: "all 0.1s ease",
-                  }}
-                >
-                  <Link2 size={13} color="#ffffff" />
-                  <span>{activeLinkNode ? "Edit Link" : "Add Link"}</span>
-                </button>
+        {floatingToolbarPos && (() => {
+          const activeAlign = (() => {
+            const el = selectedDomElementRef.current || selectedDomElement;
+            if (!el) return null;
+            if (viewMode === "mobile") {
+              if (el.classList.contains("mobile-align-left") || el.closest(".mobile-align-left")) return "left";
+              if (el.classList.contains("mobile-align-center") || el.classList.contains("mobile-center-img") || el.closest(".mobile-align-center") || el.closest(".mobile-center-img")) return "center";
+              if (el.classList.contains("mobile-align-right") || el.closest(".mobile-align-right")) return "right";
+              return null;
+            } else {
+              const textAlign = inlineStyles["text-align"] || el.style?.textAlign || el.getAttribute("align");
+              if (textAlign === "left" || textAlign === "center" || textAlign === "right") return textAlign;
 
-                {activeLinkNode && (
-                  <button
-                    type="button"
-                    onClick={handleRemoveLink}
-                    title="Remove Link (Unlink Image)"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "5px 7px",
-                      borderRadius: "5px",
-                      border: "none",
-                      background: "transparent",
-                      color: "#ef4444",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <Unlink size={13} />
-                  </button>
-                )}
+              if (el.tagName === "IMG" || el.querySelector("img")) {
+                const img = (el.tagName === "IMG" ? el : el.querySelector("img")) as HTMLElement;
+                if (img) {
+                  const alignAttr = img.getAttribute("align");
+                  if (alignAttr === "left" || alignAttr === "center" || alignAttr === "right") return alignAttr;
+                  const ml = img.style?.marginLeft || inlineStyles["margin-left"];
+                  const mr = img.style?.marginRight || inlineStyles["margin-right"];
+                  if (ml === "auto" && mr === "auto") return "center";
+                  if (ml === "auto" && (mr === "0" || mr === "0px")) return "right";
+                  if ((ml === "0" || ml === "0px") && mr === "auto") return "left";
+                }
+              }
 
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+              const parentBlock = el.closest("p, h1, h2, h3, h4, h5, h6, td, div, table") as HTMLElement | null;
+              if (parentBlock) {
+                const pAlign = parentBlock.style?.textAlign || parentBlock.getAttribute("align");
+                if (pAlign === "left" || pAlign === "center" || pAlign === "right") return pAlign;
+              }
+              return null;
+            }
+          })();
 
-                {/* 2. Replace Image from computer */}
-                <button
-                  type="button"
-                  onClick={() => selectedDomElement && handleReplaceImage(selectedDomElement)}
-                  title="Replace Image from computer"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <ImageIcon size={13} color="#38bdf8" />
-                  <span>Replace</span>
-                </button>
-
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-                {/* 3. Horizontal Alignment */}
-                <button
-                  type="button"
-                  onClick={() => handleQuickAlign("left")}
-                  title="Align Left"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <AlignLeft size={13} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickAlign("center")}
-                  title="Center Align"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <AlignCenter size={13} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickAlign("right")}
-                  title="Align Right"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <AlignRight size={13} />
-                </button>
-
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-                {/* 4. Vertical Alignment */}
-                <button
-                  type="button"
-                  onClick={() => handleVerticalAlign("top")}
-                  title="Vertical Align Top"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <ChevronUp size={13} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleVerticalAlign("middle")}
-                  title="Vertical Align Middle"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer", fontSize: "10px" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  ⏺️
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleVerticalAlign("bottom")}
-                  title="Vertical Align Bottom"
-                  style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <ChevronDown size={13} />
-                </button>
-              </>
-            ) : (
-              <>
-                {/* 1. Link Button (Highlighted First if active link) */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowColorPopover(false);
-                    setShowLinkPopover(!showLinkPopover);
-                  }}
-                  title={activeLinkNode ? "Edit Hyperlink (Active Link)" : "Insert Hyperlink"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    padding: "5px 8px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    transition: "all 0.1s ease",
-                  }}
-                >
-                  <Link2 size={13} color="#ffffff" />
-                  {activeLinkNode && <span>Edit Link</span>}
-                </button>
-
-                {/* Unlink button if active link */}
-                {activeLinkNode && (
-                  <button
-                    type="button"
-                    onClick={handleRemoveLink}
-                    title="Remove Link (Unlink)"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "5px 7px",
-                      borderRadius: "5px",
-                      border: "none",
-                      background: "transparent",
-                      color: "#ef4444",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <Unlink size={13} />
-                  </button>
-                )}
-
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-                {/* 2. Superscript (<sup>) */}
-                <button
-                  type="button"
-                  onClick={() => handleFormatText("superscript")}
-                  title="Superscript (e.g. 1,2 or TM)"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "2px",
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: "700",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <SuperIcon size={14} />
-                  <span style={{ fontSize: "11px" }}>x²</span>
-                </button>
-
-                {/* 3. Subscript (<sub>) */}
-                <button
-                  type="button"
-                  onClick={() => handleFormatText("subscript")}
-                  title="Subscript (e.g. H2O)"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "2px",
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: "700",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <SubIcon size={14} />
-                  <span style={{ fontSize: "11px" }}>x₂</span>
-                </button>
-
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-                {/* 4. Bold */}
-                <button
-                  type="button"
-                  onClick={() => handleFormatText("bold")}
-                  title="Bold (Ctrl+B)"
-                  style={{
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <Bold size={13} />
-                </button>
-
-                {/* 5. Italic */}
-                <button
-                  type="button"
-                  onClick={() => handleFormatText("italic")}
-                  title="Italic (Ctrl+I)"
-                  style={{
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <Italic size={13} />
-                </button>
-
-                {/* 6. Underline */}
-                <button
-                  type="button"
-                  onClick={() => handleFormatText("underline")}
-                  title="Underline (Ctrl+U)"
-                  style={{
-                    padding: "5px 7px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "transparent",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <Underline size={13} />
-                </button>
-
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
-
-                {/* 7. Color Picker */}
-                <div style={{ position: "relative" }}>
+          return (
+            <div
+              ref={floatingToolbarRef}
+              className="floating-selection-toolbar"
+              style={{
+                position: "fixed",
+                top: `${floatingToolbarPos.top}px`,
+                left: `${floatingToolbarPos.left}px`,
+                background: "#1e293b",
+                borderRadius: "8px",
+                boxShadow: "0 6px 20px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1)",
+                display: "flex",
+                alignItems: "center",
+                gap: "2px",
+                padding: "4px 6px",
+                zIndex: 9999,
+                userSelect: "none",
+                animation: "fadeIn 0.12s ease-out",
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              {/* If selected element is an Image, show Image Floating Toolbar */}
+              {selectedDomElement?.tagName.toLowerCase() === "img" ? (
+                <>
+                  {/* 1. Image Link / Edit Link */}
                   <button
                     type="button"
                     onClick={() => {
-                      setShowLinkPopover(false);
-                      setShowColorPopover(!showColorPopover);
+                      setShowColorPopover(false);
+                      setShowLinkPopover(!showLinkPopover);
                     }}
-                    title="Change Text Color"
+                    title={activeLinkNode ? "Edit Image Link" : "Add Link to Image"}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "5px 8px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
+                      color: "#ffffff",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      transition: "all 0.1s ease",
+                    }}
+                  >
+                    <Link2 size={13} color="#ffffff" />
+                    <span>{activeLinkNode ? "Edit Link" : "Add Link"}</span>
+                  </button>
+
+                  {activeLinkNode && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveLink}
+                      title="Remove Link (Unlink Image)"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "5px 7px",
+                        borderRadius: "5px",
+                        border: "none",
+                        background: "transparent",
+                        color: "#ef4444",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Unlink size={13} />
+                    </button>
+                  )}
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* 2. Replace Image from computer */}
+                  <button
+                    type="button"
+                    onClick={() => selectedDomElement && handleReplaceImage(selectedDomElement)}
+                    title="Replace Image from computer"
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -2899,134 +3263,530 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                       padding: "5px 7px",
                       borderRadius: "5px",
                       border: "none",
-                      background: showColorPopover ? "#334155" : "transparent",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <ImageIcon size={13} color="#38bdf8" />
+                    <span>Replace</span>
+                  </button>
+
+                  {/* 2b. Replace with Cloud URL */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLinkPopover(false);
+                      setShowColorPopover(false);
+                      if (!showImageUrlPopover && selectedDomElement) {
+                        setImageUrlInput(selectedDomElement.getAttribute("src") || "");
+                      }
+                      setShowImageUrlPopover(!showImageUrlPopover);
+                    }}
+                    title="Replace Image with Cloud URL / Direct Web Link"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: showImageUrlPopover ? "#0284c7" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!showImageUrlPopover) e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!showImageUrlPopover) e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <Cloud size={13} color="#38bdf8" />
+                    <span>Cloud Link</span>
+                  </button>
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* 3. Horizontal Alignment */}
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("left")}
+                    title={`Align Left ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "left" ? "#4f46e5" : "transparent",
                       color: "#f8fafc",
                       cursor: "pointer",
                     }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "left") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "left") e.currentTarget.style.background = "transparent";
+                    }}
                   >
-                    <Palette size={13} />
-                    <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: selectedTextColor, border: "1px solid #ffffff" }} />
+                    <AlignLeft size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("center")}
+                    title={`Center Align ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "center" ? "#4f46e5" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "center") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "center") e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <AlignCenter size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("right")}
+                    title={`Align Right ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "right" ? "#4f46e5" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "right") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "right") e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <AlignRight size={13} />
                   </button>
 
-                  {/* Color Swatch Popover */}
-                  {showColorPopover && (
-                    <div
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* 4. Vertical Alignment */}
+                  <button
+                    type="button"
+                    onClick={() => handleVerticalAlign("top")}
+                    title="Vertical Align Top"
+                    style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <ChevronUp size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleVerticalAlign("middle")}
+                    title="Vertical Align Middle"
+                    style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer", fontSize: "10px" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    ⏺️
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleVerticalAlign("bottom")}
+                    title="Vertical Align Bottom"
+                    style={{ padding: "5px 6px", borderRadius: "5px", border: "none", background: "transparent", color: "#f8fafc", cursor: "pointer" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <ChevronDown size={13} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* 1. Link Button (Highlighted First if active link) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowColorPopover(false);
+                      setShowLinkPopover(!showLinkPopover);
+                    }}
+                    title={activeLinkNode ? "Edit Hyperlink (Active Link)" : "Insert Hyperlink"}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "5px 8px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeLinkNode || showLinkPopover ? "#4f46e5" : "transparent",
+                      color: "#ffffff",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      transition: "all 0.1s ease",
+                    }}
+                  >
+                    <Link2 size={13} color="#ffffff" />
+                    {activeLinkNode && <span>Edit Link</span>}
+                  </button>
+
+                  {/* Unlink button if active link */}
+                  {activeLinkNode && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveLink}
+                      title="Remove Link (Unlink)"
                       style={{
-                        position: "absolute",
-                        top: "100%",
-                        left: "50%",
-                        transform: "translateX(-50%)",
-                        marginTop: "8px",
-                        background: "#ffffff",
-                        borderRadius: "8px",
-                        padding: "8px",
-                        boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
-                        border: "1px solid #e2e8f0",
-                        display: "grid",
-                        gridTemplateColumns: "repeat(5, 20px)",
-                        gap: "6px",
-                        zIndex: 10000,
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "5px 7px",
+                        borderRadius: "5px",
+                        border: "none",
+                        background: "transparent",
+                        color: "#ef4444",
+                        cursor: "pointer",
                       }}
-                      onMouseDown={(e) => e.stopPropagation()}
                     >
-                      {[
-                        "#000000", "#151515", "#475569", "#94a3b8", "#ffffff",
-                        "#ef4444", "#f97316", "#eab308", "#16a34a", "#2563eb",
-                        "#4f46e5", "#7c3aed", "#9333ea", "#db2777", "#9e0b0f"
-                      ].map((c) => (
-                        <div
-                          key={c}
-                          onClick={() => handleApplyTextColor(c)}
-                          style={{
-                            width: "20px",
-                            height: "20px",
-                            borderRadius: "4px",
-                            background: c,
-                            border: c === "#ffffff" ? "1px solid #cbd5e1" : "1px solid rgba(0,0,0,0.1)",
-                            cursor: "pointer",
-                            transition: "transform 0.1s ease",
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.2)")}
-                          onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
-                          title={c}
-                        />
-                      ))}
-                    </div>
+                      <Unlink size={13} />
+                    </button>
                   )}
-                </div>
 
-                <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 4px" }}></div>
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
 
-                {/* Quick Add Elements inside column below active element */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const btnPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "button-cta");
-                    if (btnPreset) {
-                      handleInsertPreset(btnPreset.generateHtml(), "bottom", "column");
-                    }
-                  }}
-                  title="Add Button inside this column below active text"
+                  {/* 2. Superscript (<sup>) */}
+                  <button
+                    type="button"
+                    onClick={() => handleFormatText("superscript")}
+                    title="Superscript (e.g. 1,2 or TM)"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "2px",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <SuperIcon size={14} />
+                    <span style={{ fontSize: "11px" }}>x²</span>
+                  </button>
+
+                  {/* 3. Subscript (<sub>) */}
+                  <button
+                    type="button"
+                    onClick={() => handleFormatText("subscript")}
+                    title="Subscript (e.g. H2O)"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "2px",
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <SubIcon size={14} />
+                    <span style={{ fontSize: "11px" }}>x₂</span>
+                  </button>
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* 4. Bold */}
+                  <button
+                    type="button"
+                    onClick={() => handleFormatText("bold")}
+                    title="Bold (Ctrl+B)"
+                    style={{
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Bold size={13} />
+                  </button>
+
+                  {/* 5. Italic */}
+                  <button
+                    type="button"
+                    onClick={() => handleFormatText("italic")}
+                    title="Italic (Ctrl+I)"
+                    style={{
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Italic size={13} />
+                  </button>
+
+                  {/* 6. Underline */}
+                  <button
+                    type="button"
+                    onClick={() => handleFormatText("underline")}
+                    title="Underline (Ctrl+U)"
+                    style={{
+                      padding: "5px 7px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Underline size={13} />
+                  </button>
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* Text Alignment Buttons (Left, Center, Right) */}
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("left")}
+                    title={`Align Left ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "left" ? "#4f46e5" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "left") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "left") e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <AlignLeft size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("center")}
+                    title={`Center Align ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "center" ? "#4f46e5" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "center") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "center") e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <AlignCenter size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAlign("right")}
+                    title={`Align Right ${viewMode === "mobile" ? "(Mobile)" : "(Desktop)"}`}
+                    style={{
+                      padding: "5px 6px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: activeAlign === "right" ? "#4f46e5" : "transparent",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (activeAlign !== "right") e.currentTarget.style.background = "#334155";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (activeAlign !== "right") e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <AlignRight size={13} />
+                  </button>
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 2px" }}></div>
+
+                  {/* 7. Color Picker */}
+                  <div style={{ position: "relative" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowLinkPopover(false);
+                        setShowColorPopover(!showColorPopover);
+                      }}
+                      title="Change Text Color"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        padding: "5px 7px",
+                        borderRadius: "5px",
+                        border: "none",
+                        background: showColorPopover ? "#334155" : "transparent",
+                        color: "#f8fafc",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Palette size={13} />
+                      <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: selectedTextColor, border: "1px solid #ffffff" }} />
+                    </button>
+
+                    {/* Color Swatch Popover */}
+                    {showColorPopover && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "100%",
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          marginTop: "8px",
+                          background: "#ffffff",
+                          borderRadius: "8px",
+                          padding: "8px",
+                          boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+                          border: "1px solid #e2e8f0",
+                          display: "grid",
+                          gridTemplateColumns: "repeat(5, 20px)",
+                          gap: "6px",
+                          zIndex: 10000,
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        {[
+                          "#000000", "#151515", "#475569", "#94a3b8", "#ffffff",
+                          "#ef4444", "#f97316", "#eab308", "#16a34a", "#2563eb",
+                          "#4f46e5", "#7c3aed", "#9333ea", "#db2777", "#9e0b0f"
+                        ].map((c) => (
+                          <div
+                            key={c}
+                            onClick={() => handleApplyTextColor(c)}
+                            style={{
+                              width: "20px",
+                              height: "20px",
+                              borderRadius: "4px",
+                              background: c,
+                              border: c === "#ffffff" ? "1px solid #cbd5e1" : "1px solid rgba(0,0,0,0.1)",
+                              cursor: "pointer",
+                              transition: "transform 0.1s ease",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.2)")}
+                            onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
+                            title={c}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ width: "1px", height: "16px", background: "#334155", margin: "0 4px" }}></div>
+
+                  {/* Quick Add Elements inside column below active element */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const btnPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "button-cta");
+                      if (btnPreset) {
+                        handleInsertPreset(btnPreset.generateHtml(), "bottom", "column");
+                      }
+                    }}
+                    title="Add Button inside this column below active text"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "3px",
+                      padding: "4px 8px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "#4f46e5",
+                      color: "#ffffff",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                    }}
+                  >
+                    <Plus size={12} />
+                    <span>Button</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const imgPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "hero-image");
+                      if (imgPreset) {
+                        handleInsertPreset(imgPreset.generateHtml(), "bottom", "column");
+                      }
+                    }}
+                    title="Add Image inside this column below active text"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "3px",
+                      padding: "4px 8px",
+                      borderRadius: "5px",
+                      border: "none",
+                      background: "#334155",
+                      color: "#f8fafc",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#475569")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "#334155")}
+                  >
+                    <Plus size={12} />
+                    <span>Image</span>
+                  </button>
+                </>
+              )}
+
+              {/* Link Edit Popover */}
+              {showLinkPopover && (
+                <div
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "3px",
-                    padding: "4px 8px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "#4f46e5",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    fontSize: "11px",
-                    fontWeight: "700",
-                  }}
-                >
-                  <Plus size={12} />
-                  <span>Button</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const imgPreset = EMAIL_COMPONENT_PRESETS.find((p) => p.id === "hero-image");
-                    if (imgPreset) {
-                      handleInsertPreset(imgPreset.generateHtml(), "bottom", "column");
-                    }
-                  }}
-                  title="Add Image inside this column below active text"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "3px",
-                    padding: "4px 8px",
-                    borderRadius: "5px",
-                    border: "none",
-                    background: "#334155",
-                    color: "#f8fafc",
-                    cursor: "pointer",
-                    fontSize: "11px",
-                    fontWeight: "600",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#475569")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "#334155")}
-                >
-                  <Plus size={12} />
-                  <span>Image</span>
-                </button>
-              </>
-            )}
-
-            {/* Link Edit Popover */}
-            {showLinkPopover && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "100%",
-                  left: "0",
-                  marginTop: "8px",
-                  background: "#ffffff",
-                  borderRadius: "8px",
-                  padding: "12px",
+                    position: "absolute",
+                    top: "100%",
+                    left: "0",
+                    marginTop: "8px",
+                    background: "#ffffff",
+                    borderRadius: "8px",
+                    padding: "12px",
                   boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
                   border: "1px solid #cbd5e1",
                   display: "flex",
@@ -3130,8 +3890,112 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
                 </div>
               </div>
             )}
+
+            {/* Cloud Image URL Popover */}
+            {showImageUrlPopover && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: "0",
+                  marginTop: "8px",
+                  background: "#ffffff",
+                  borderRadius: "8px",
+                  padding: "12px",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.25)",
+                  border: "1px solid #cbd5e1",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  width: "320px",
+                  zIndex: 10000,
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Cloud size={14} color="#0284c7" />
+                    <span style={{ fontSize: "11.5px", fontWeight: "700", color: "#1e293b" }}>
+                      Replace with Cloud Image URL
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowImageUrlPopover(false)}
+                    style={{ background: "transparent", border: "none", color: "#94a3b8", cursor: "pointer", padding: "2px", display: "flex", alignItems: "center" }}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+                <p style={{ margin: 0, fontSize: "10.5px", color: "#64748b", lineHeight: "1.35" }}>
+                  Enter any direct cloud or CDN image URL (e.g. AWS S3, Cloudinary, Imgur, or website link).
+                </p>
+                <input
+                  type="url"
+                  value={imageUrlInput}
+                  onChange={(e) => setImageUrlInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleApplyImageUrl();
+                    }
+                  }}
+                  placeholder="https://example.com/image.jpg"
+                  autoFocus
+                  style={{
+                    padding: "6px 8px",
+                    borderRadius: "5px",
+                    border: "1px solid #cbd5e1",
+                    fontSize: "12px",
+                    color: "#0f172a",
+                    outline: "none",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                />
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px", marginTop: "2px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowImageUrlPopover(false)}
+                    style={{
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      border: "1px solid #e2e8f0",
+                      background: "#f8fafc",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      color: "#64748b",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleApplyImageUrl}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "4px 12px",
+                      borderRadius: "4px",
+                      border: "none",
+                      background: "#0284c7",
+                      color: "#ffffff",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Check size={12} />
+                    <span>Apply URL</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        );
+      })()}
 
         {/* Right Sidebar: Chrome DevTools Style Inspector & Component Library */}
         <aside className="editor-sidebar-inspector">
@@ -3159,6 +4023,9 @@ export const Screen3Editor: React.FC<Screen3Props> = ({
             canCopySectionCode={canCopySectionCode}
             copySectionStatus={sectionCopyStatus}
             onCopySectionCode={handleCopySectionCode}
+            onAiReplaceSection={handleAiReplaceSection}
+            onAiInsertSection={handleAiInsertSection}
+            selectedSectionHtml={selectedSectionHtml}
             domRoot={iframeDomRoot || emailIframeRef.current?.contentDocument?.body || null}
           />
         </aside>

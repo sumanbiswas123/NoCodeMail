@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
         .file = b.path("src/c_stb_image_write.c"),
         .flags = &.{},
     });
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("src/folder_picker.cpp"),
+        .flags = &.{},
+    });
 
     exe.root_module.linkSystemLibrary("ole32", .{});
     exe.root_module.linkSystemLibrary("oleaut32", .{});

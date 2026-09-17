@@ -67,13 +67,14 @@ extern "ws2_32" fn htonl(hostlong: u32) callconv(.winapi) u32;
 const SERVER_PORT: u16 = 28941;
 
 fn mimeType(path: []const u8) []const u8 {
-    if (std.mem.endsWith(u8, path, ".html")) return "text/html; charset=utf-8";
+    if (std.mem.endsWith(u8, path, ".html") or std.mem.endsWith(u8, path, ".html.txt")) return "text/html; charset=utf-8";
     if (std.mem.endsWith(u8, path, ".js")) return "application/javascript; charset=utf-8";
     if (std.mem.endsWith(u8, path, ".css")) return "text/css; charset=utf-8";
     if (std.mem.endsWith(u8, path, ".svg")) return "image/svg+xml";
-    if (std.mem.endsWith(u8, path, ".png")) return "image/png";
-    if (std.mem.endsWith(u8, path, ".jpg") or std.mem.endsWith(u8, path, ".jpeg")) return "image/jpeg";
-    if (std.mem.endsWith(u8, path, ".json")) return "application/json";
+    if (std.mem.endsWith(u8, path, ".png") or std.mem.endsWith(u8, path, ".png.txt")) return "image/png";
+    if (std.mem.endsWith(u8, path, ".jpg") or std.mem.endsWith(u8, path, ".jpg.txt") or std.mem.endsWith(u8, path, ".jpeg") or std.mem.endsWith(u8, path, ".jpeg.txt")) return "image/jpeg";
+    if (std.mem.endsWith(u8, path, ".json") or std.mem.endsWith(u8, path, ".json.txt")) return "application/json";
+    if (std.mem.endsWith(u8, path, ".txt")) return "text/plain; charset=utf-8";
     if (std.mem.endsWith(u8, path, ".woff2")) return "font/woff2";
     if (std.mem.endsWith(u8, path, ".woff")) return "font/woff";
     if (std.mem.endsWith(u8, path, ".ttf")) return "font/ttf";
@@ -231,9 +232,12 @@ fn handleConnection(sock: usize) void {
                std.mem.startsWith(u8, url_path, "D:") or std.mem.startsWith(u8, url_path, "d:") or
                std.mem.startsWith(u8, url_path, "C%3A") or std.mem.startsWith(u8, url_path, "c%3A") or
                std.mem.startsWith(u8, url_path, "/asset_") or std.mem.startsWith(u8, url_path, "/assets/") or
-               std.mem.endsWith(u8, url_path, ".png") or std.mem.endsWith(u8, url_path, ".jpg") or
-               std.mem.endsWith(u8, url_path, ".jpeg") or std.mem.endsWith(u8, url_path, ".webp") or
-               std.mem.endsWith(u8, url_path, ".gif")) {
+               std.mem.endsWith(u8, url_path, ".png") or std.mem.endsWith(u8, url_path, ".png.txt") or
+               std.mem.endsWith(u8, url_path, ".jpg") or std.mem.endsWith(u8, url_path, ".jpg.txt") or
+               std.mem.endsWith(u8, url_path, ".jpeg") or std.mem.endsWith(u8, url_path, ".jpeg.txt") or
+               std.mem.endsWith(u8, url_path, ".webp") or std.mem.endsWith(u8, url_path, ".gif") or
+               std.mem.endsWith(u8, url_path, ".txt") or std.mem.endsWith(u8, url_path, ".json") or
+               std.mem.endsWith(u8, url_path, ".html")) {
         // Direct package asset serving by path: /pkg/<encoded_base_dir>/<rel_path> or /pkg/<encoded_full_path> or direct drive path or asset filename
         var raw_sub = url_path;
         if (std.mem.startsWith(u8, raw_sub, "/pkg/")) {
@@ -1242,6 +1246,334 @@ pub const App = struct {
             self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to open browser\"}") catch {};
         }
     }
+
+    pub fn handleOpenFolder(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const OpenParam = struct {
+            path: []const u8,
+        };
+
+        var target_path: []const u8 = "";
+
+        if (std.json.parseFromSlice([]OpenParam, alloc, req, .{})) |parsed_arr| {
+            if (parsed_arr.value.len > 0) {
+                target_path = parsed_arr.value[0].path;
+            }
+        } else |_| {
+            if (std.json.parseFromSlice(OpenParam, alloc, req, .{})) |parsed_obj| {
+                target_path = parsed_obj.value.path;
+            } else |_| {
+                self.w.respond(seq, .err, "{\"error\":\"Invalid arguments\"}") catch {};
+                return;
+            }
+        }
+
+        if (target_path.len == 0) {
+            self.w.respond(seq, .err, "{\"error\":\"Empty path\"}") catch {};
+            return;
+        }
+
+        var path_w: [2048]u16 = undefined;
+        const p_len = win32_base.MultiByteToWideChar(65001, 0, target_path.ptr, @intCast(target_path.len), &path_w, @intCast(path_w.len - 1));
+        if (p_len <= 0) {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Unicode conversion failed\"}") catch {};
+            return;
+        }
+        path_w[@intCast(p_len)] = 0;
+
+        const open_op_w = std.unicode.utf8ToUtf16LeStringLiteral("open");
+        const ret = win32_shell.ShellExecuteW(null, open_op_w, @ptrCast(&path_w), null, null, 1);
+        if (ret > 32) {
+            self.w.respond(seq, .ok, "{\"success\":true}") catch {};
+        } else {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Failed to open folder in File Explorer\"}") catch {};
+        }
+    }
+
+    extern "c" fn pickFolderNative(outPath: [*]u16, maxLen: c_int) callconv(.c) c_int;
+
+    pub fn handleChooseProject(self: *App, seq: [:0]const u8, _: [:0]const u8) void {
+        var folder_buf_w: [2048]u16 = [_]u16{0} ** 2048;
+        if (pickFolderNative(&folder_buf_w, @intCast(folder_buf_w.len)) != 0) {
+            const w_len = std.mem.indexOfScalar(u16, &folder_buf_w, 0) orelse folder_buf_w.len;
+            var utf8_buf: [4096]u8 = undefined;
+            const u8_len = std.unicode.utf16LeToUtf8(&utf8_buf, folder_buf_w[0..w_len]) catch 0;
+            if (u8_len > 0) {
+                const selected = utf8_buf[0..u8_len];
+                const res_json = std.fmt.allocPrintSentinel(std.heap.page_allocator, "{{\"success\":true,\"path\":{f}}}", .{std.json.fmt(selected, .{})}, 0) catch return;
+                defer std.heap.page_allocator.free(res_json);
+                self.w.respond(seq, .ok, res_json) catch {};
+                return;
+            }
+        }
+        self.w.respond(seq, .ok, "{\"success\":false,\"canceled\":true}") catch {};
+    }
+
+    pub fn handleInspectProject(self: *App, seq: [:0]const u8, req: [:0]const u8) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const WIN32_FIND_DATAW = extern struct {
+            dwFileAttributes: u32,
+            ftCreationTime: [2]u32,
+            ftLastAccessTime: [2]u32,
+            ftLastWriteTime: [2]u32,
+            nFileSizeHigh: u32,
+            nFileSizeLow: u32,
+            dwReserved0: u32,
+            dwReserved1: u32,
+            cFileName: [260]u16,
+            cAlternateFileName: [14]u16,
+            dwFileType: u32 = 0,
+            dwCreatorType: u32 = 0,
+            wFinderFlags: u16 = 0,
+        };
+
+        const win32_find = struct {
+            extern "kernel32" fn FindFirstFileW(lpFileName: [*:0]const u16, lpFindFileData: *WIN32_FIND_DATAW) callconv(.winapi) ?*anyopaque;
+            extern "kernel32" fn FindNextFileW(hFindFile: *anyopaque, lpFindFileData: *WIN32_FIND_DATAW) callconv(.winapi) c_int;
+            extern "kernel32" fn FindClose(hFindFile: *anyopaque) callconv(.winapi) c_int;
+        };
+
+        const InspectParam = struct {
+            path: []const u8,
+        };
+
+        var input_path: []const u8 = "";
+
+        if (std.json.parseFromSlice([]InspectParam, alloc, req, .{})) |parsed_arr| {
+            if (parsed_arr.value.len > 0) input_path = parsed_arr.value[0].path;
+        } else |_| {
+            if (std.json.parseFromSlice(InspectParam, alloc, req, .{})) |parsed_obj| {
+                input_path = parsed_obj.value.path;
+            } else |_| {
+                self.w.respond(seq, .err, "{\"error\":\"Invalid arguments\"}") catch {};
+                return;
+            }
+        }
+
+        if (input_path.len == 0) {
+            self.w.respond(seq, .err, "{\"error\":\"Empty path\"}") catch {};
+            return;
+        }
+
+        // Determine parent directory if a file path was passed
+        var dir_path = input_path;
+        var specific_file: ?[]const u8 = null;
+
+        if (std.mem.lastIndexOfAny(u8, input_path, "/\\")) |last_slash| {
+            const fname = input_path[last_slash + 1 ..];
+            if (std.mem.indexOfScalar(u8, fname, '.') != null) {
+                dir_path = input_path[0..last_slash];
+                specific_file = fname;
+            }
+        }
+
+        // Build wildcard search pattern: {dir}\*
+        const pattern_str = std.fmt.allocPrint(alloc, "{s}\\*", .{dir_path}) catch return;
+        var pattern_w: [2048]u16 = undefined;
+        const pat_len = win32_base.MultiByteToWideChar(65001, 0, pattern_str.ptr, @intCast(pattern_str.len), &pattern_w, @intCast(pattern_w.len - 1));
+        if (pat_len <= 0) {
+            self.w.respond(seq, .ok, "{\"success\":false,\"error\":\"Unicode path conversion failed\"}") catch {};
+            return;
+        }
+        pattern_w[@intCast(pat_len)] = 0;
+
+        var find_data: WIN32_FIND_DATAW = undefined;
+        const h_find = win32_find.FindFirstFileW(@ptrCast(&pattern_w), &find_data);
+
+        var html_files = std.ArrayList([]const u8).empty;
+        defer html_files.deinit(alloc);
+        var json_files = std.ArrayList([]const u8).empty;
+        defer json_files.deinit(alloc);
+        var mjml_files = std.ArrayList([]const u8).empty;
+        defer mjml_files.deinit(alloc);
+        var preview_files = std.ArrayList([]const u8).empty;
+        defer preview_files.deinit(alloc);
+        var all_files = std.ArrayList([]const u8).empty;
+        defer all_files.deinit(alloc);
+        var has_assets = false;
+
+        // Scan only the selected directory directly (no subfolders)
+        if (h_find != null and @intFromPtr(h_find) != ~@as(usize, 0)) {
+            defer _ = win32_find.FindClose(h_find.?);
+
+            while (true) {
+                const fname_w_len = std.mem.indexOfScalar(u16, &find_data.cFileName, 0) orelse find_data.cFileName.len;
+                var fname_u8_buf: [512]u8 = undefined;
+                const fname_len = std.unicode.utf16LeToUtf8(&fname_u8_buf, find_data.cFileName[0..fname_w_len]) catch 0;
+
+                if (fname_len > 0) {
+                    const fn_str = fname_u8_buf[0..fname_len];
+                    if (!std.mem.eql(u8, fn_str, ".") and !std.mem.eql(u8, fn_str, "..")) {
+                        const is_dir = (find_data.dwFileAttributes & 0x10) != 0;
+                        if (is_dir) {
+                            if (std.ascii.eqlIgnoreCase(fn_str, "assets") or std.ascii.eqlIgnoreCase(fn_str, "images")) {
+                                has_assets = true;
+                            }
+                        } else {
+                            const fn_dup = alloc.dupe(u8, fn_str) catch fn_str;
+                            all_files.append(alloc, fn_dup) catch {};
+
+                            if (std.mem.endsWith(u8, fn_str, ".html") or std.mem.endsWith(u8, fn_str, ".htm")) {
+                                html_files.append(alloc, fn_dup) catch {};
+                            } else if (std.mem.endsWith(u8, fn_str, ".json")) {
+                                json_files.append(alloc, fn_dup) catch {};
+                            } else if (std.mem.endsWith(u8, fn_str, ".mjml")) {
+                                mjml_files.append(alloc, fn_dup) catch {};
+                            } else if (std.mem.endsWith(u8, fn_str, ".png") or std.mem.endsWith(u8, fn_str, ".jpg") or std.mem.endsWith(u8, fn_str, ".jpeg")) {
+                                if (std.ascii.indexOfIgnoreCase(fn_str, "preview") != null or
+                                    std.ascii.indexOfIgnoreCase(fn_str, "snapshot") != null or
+                                    std.ascii.indexOfIgnoreCase(fn_str, "page_") != null) {
+                                    preview_files.append(alloc, fn_dup) catch {};
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (win32_find.FindNextFileW(h_find.?, &find_data) == 0) break;
+            }
+        }
+
+        // Verification: Must have at least one HTML template or Design JSON or MJML file
+        if (html_files.items.len == 0 and json_files.items.len == 0 and mjml_files.items.len == 0) {
+            const ResFail = struct {
+                success: bool,
+                @"error": []const u8,
+                checked_dir: []const u8,
+                files_found: []const []const u8,
+            };
+            const fail_obj = ResFail{
+                .success = false,
+                .@"error" = "No valid email template (*.html), MJML (*.mjml), or design extraction (*_design.json) found in the selected folder.",
+                .checked_dir = dir_path,
+                .files_found = all_files.items,
+            };
+            const res_json = std.fmt.allocPrintSentinel(alloc, "{f}", .{std.json.fmt(fail_obj, .{})}, 0) catch return;
+            self.w.respond(seq, .ok, res_json) catch {};
+            return;
+        }
+
+        // Resolve primary files
+        var chosen_html_path: []const u8 = "";
+        var chosen_html_content: []const u8 = "";
+        var chosen_json_path: []const u8 = "";
+        var chosen_json_content: []const u8 = "";
+        var chosen_mjml_path: []const u8 = "";
+        var chosen_mjml_content: []const u8 = "";
+        var chosen_preview_path: []const u8 = "";
+
+        // 1. Pick HTML file
+        if (specific_file) |sf| {
+            if (std.mem.endsWith(u8, sf, ".html") or std.mem.endsWith(u8, sf, ".htm")) {
+                chosen_html_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, sf }) catch "";
+            }
+        }
+        if (chosen_html_path.len == 0 and html_files.items.len > 0) {
+            // Prefer index.html or first
+            var pick_html = html_files.items[0];
+            for (html_files.items) |hf| {
+                if (std.ascii.eqlIgnoreCase(hf, "index.html")) {
+                    pick_html = hf;
+                    break;
+                }
+            }
+            chosen_html_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, pick_html }) catch "";
+        }
+        if (chosen_html_path.len > 0) {
+            const p_z = alloc.dupeZ(u8, chosen_html_path) catch return;
+            chosen_html_content = readFileAlloc(alloc, p_z) orelse "";
+        }
+
+        // 2. Pick Design JSON file
+        if (specific_file) |sf| {
+            if (std.mem.endsWith(u8, sf, ".json")) {
+                chosen_json_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, sf }) catch "";
+            }
+        }
+        if (chosen_json_path.len == 0 and json_files.items.len > 0) {
+            var pick_json = json_files.items[0];
+            for (json_files.items) |jf| {
+                if (std.mem.endsWith(u8, jf, "_design.json") or std.ascii.eqlIgnoreCase(jf, "design.json")) {
+                    pick_json = jf;
+                    break;
+                }
+            }
+            chosen_json_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, pick_json }) catch "";
+        }
+        if (chosen_json_path.len > 0) {
+            const p_z = alloc.dupeZ(u8, chosen_json_path) catch return;
+            chosen_json_content = readFileAlloc(alloc, p_z) orelse "";
+        }
+
+        // 3. Pick MJML file
+        if (specific_file) |sf| {
+            if (std.mem.endsWith(u8, sf, ".mjml")) {
+                chosen_mjml_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, sf }) catch "";
+            }
+        }
+        if (chosen_mjml_path.len == 0 and mjml_files.items.len > 0) {
+            chosen_mjml_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, mjml_files.items[0] }) catch "";
+        }
+        if (chosen_mjml_path.len > 0) {
+            const p_z = alloc.dupeZ(u8, chosen_mjml_path) catch return;
+            chosen_mjml_content = readFileAlloc(alloc, p_z) orelse "";
+        }
+
+        // 4. Pick Preview image
+        if (preview_files.items.len > 0) {
+            chosen_preview_path = std.fmt.allocPrint(alloc, "{s}\\{s}", .{ dir_path, preview_files.items[0] }) catch "";
+        }
+
+        // Configure active package dir for instant asset serving
+        setLastPackageDir(dir_path);
+
+        // Extract base project name from folder name
+        var proj_name = dir_path;
+        if (std.mem.lastIndexOfAny(u8, dir_path, "/\\")) |idx| {
+            proj_name = dir_path[idx + 1 ..];
+        }
+
+        const ResSuccess = struct {
+            success: bool,
+            package_dir: []const u8,
+            project_name: []const u8,
+            design_json_path: []const u8,
+            design_json: []const u8,
+            html_path: []const u8,
+            html_content: []const u8,
+            mjml_path: []const u8,
+            mjml_content: []const u8,
+            preview_image_path: []const u8,
+            has_assets: bool,
+            files_found: []const []const u8,
+            checked_dir: []const u8,
+        };
+
+        const succ_obj = ResSuccess{
+            .success = true,
+            .package_dir = dir_path,
+            .project_name = proj_name,
+            .design_json_path = chosen_json_path,
+            .design_json = chosen_json_content,
+            .html_path = chosen_html_path,
+            .html_content = chosen_html_content,
+            .mjml_path = chosen_mjml_path,
+            .mjml_content = chosen_mjml_content,
+            .preview_image_path = chosen_preview_path,
+            .has_assets = has_assets,
+            .files_found = all_files.items,
+            .checked_dir = dir_path,
+        };
+
+        const res_json = std.fmt.allocPrintSentinel(alloc, "{f}", .{std.json.fmt(succ_obj, .{})}, 0) catch return;
+        self.w.respond(seq, .ok, res_json) catch {};
+    }
 };
 
 pub fn main() !void {
@@ -1386,6 +1718,9 @@ pub fn main() !void {
     try w.bind(App, "copyAsset", App.handleCopyAsset, &app);
     try w.bind(App, "getInstalledBrowsers", App.handleGetInstalledBrowsers, &app);
     try w.bind(App, "openInBrowser", App.handleOpenInBrowser, &app);
+    try w.bind(App, "openFolder", App.handleOpenFolder, &app);
+    try w.bind(App, "chooseProject", App.handleChooseProject, &app);
+    try w.bind(App, "inspectProject", App.handleInspectProject, &app);
 
     // Navigate to embedded local HTTP server port 28941
     try w.navigate("http://localhost:28941/");

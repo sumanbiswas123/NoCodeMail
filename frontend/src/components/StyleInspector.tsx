@@ -25,7 +25,17 @@ import {
   Upload,
   Copy,
   Smartphone,
-  Columns2
+  Columns2,
+  Check,
+  Code2,
+  Bot,
+  RefreshCw,
+  Trash2,
+  CornerDownRight,
+  HelpCircle,
+  Wand2,
+  CheckCircle2,
+  AlertCircle
 } from "lucide-react";
 import { BoxModel } from "./BoxModel";
 import { EMAIL_COMPONENT_PRESETS, ComponentPreset } from "./ComponentPresets";
@@ -41,8 +51,8 @@ interface StyleInspectorProps {
   selectedElement: HTMLElement | null;
   inlineStyles: Record<string, string>;
   viewMode?: "desktop" | "mobile";
-  activeTab?: "components" | "styles";
-  onTabChange?: (tab: "components" | "styles") => void;
+  activeTab?: "components" | "ai" | "styles";
+  onTabChange?: (tab: "components" | "ai" | "styles") => void;
   onUpdateStyle: (property: string, value: string) => void;
   onRemoveStyle: (property: string) => void;
   onRenameStyle?: (oldProperty: string, newProperty: string, value: string) => void;
@@ -62,6 +72,9 @@ interface StyleInspectorProps {
   canCopySectionCode?: boolean;
   copySectionStatus?: "idle" | "copied" | "error";
   onCopySectionCode?: () => Promise<boolean> | boolean;
+  onAiReplaceSection?: (aiHtml: string) => boolean | void;
+  onAiInsertSection?: (aiHtml: string, position: "below" | "above") => boolean | void;
+  selectedSectionHtml?: string;
 }
 
 interface DomTreeNodeProps {
@@ -293,17 +306,100 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
   canCopySectionCode = false,
   copySectionStatus = "idle",
   onCopySectionCode,
+  onAiReplaceSection,
+  onAiInsertSection,
+  selectedSectionHtml = "",
 }) => {
-  // Main Panel Tab: "components" (default) vs "styles"
-  const [internalTab, setInternalTab] = useState<"components" | "styles">("components");
+  // Main Panel Tab: "components" (default), "ai", vs "styles"
+  const [internalTab, setInternalTab] = useState<"components" | "ai" | "styles">("components");
   const activeTab = activeTabProp !== undefined ? activeTabProp : internalTab;
 
-  const handleTabClick = (tab: "components" | "styles") => {
+  const handleTabClick = (tab: "components" | "ai" | "styles") => {
     setInternalTab(tab);
     if (onTabChange) {
       onTabChange(tab);
     }
   };
+
+  // AI Tab State & Actions
+  const [aiCodeInput, setAiCodeInput] = useState<string>("");
+  const [aiStatus, setAiStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [copiedPromptStatus, setCopiedPromptStatus] = useState<boolean>(false);
+
+  const handleAiCodeChange = (val: string) => {
+    let clean = val;
+    if (clean.includes("```")) {
+      clean = clean.replace(/^```(?:html)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    }
+    setAiCodeInput(clean);
+  };
+
+  const handleCopyAiPrompt = async () => {
+    const rawCode = selectedSectionHtml || "";
+    const prompt = `Here is an email template section in HTML. Please modify it according to my requirements while keeping it clean, responsive, and compatible with all email clients (max-width: 700px, inline CSS):\n\n\`\`\`html\n${rawCode}\n\`\`\`\n\nRequirements:\n- `;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(prompt);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = prompt;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopiedPromptStatus(true);
+      setTimeout(() => setCopiedPromptStatus(false), 2000);
+    } catch {
+      if (onCopySectionCode) onCopySectionCode();
+    }
+  };
+
+  const handleExecuteReplace = () => {
+    if (!aiCodeInput.trim()) {
+      setAiStatus({ type: "error", message: "Please paste your AI-generated HTML first." });
+      return;
+    }
+    if (!onAiReplaceSection) return;
+    const res = onAiReplaceSection(aiCodeInput);
+    if (res !== false) {
+      setAiStatus({ type: "success", message: "Section successfully replaced in email!" });
+      setTimeout(() => setAiStatus(null), 3500);
+    } else {
+      setAiStatus({ type: "error", message: "Failed to replace section. Please select a section first." });
+    }
+  };
+
+  const handleExecuteInsertBelow = () => {
+    if (!aiCodeInput.trim()) {
+      setAiStatus({ type: "error", message: "Please paste your AI-generated HTML first." });
+      return;
+    }
+    if (!onAiInsertSection) return;
+    const res = onAiInsertSection(aiCodeInput, "below");
+    if (res !== false) {
+      setAiStatus({ type: "success", message: "New AI section inserted below!" });
+      setTimeout(() => setAiStatus(null), 3500);
+    } else {
+      setAiStatus({ type: "error", message: "Failed to insert section." });
+    }
+  };
+
+  const handleExecuteInsertAbove = () => {
+    if (!aiCodeInput.trim()) {
+      setAiStatus({ type: "error", message: "Please paste your AI-generated HTML first." });
+      return;
+    }
+    if (!onAiInsertSection) return;
+    const res = onAiInsertSection(aiCodeInput, "above");
+    if (res !== false) {
+      setAiStatus({ type: "success", message: "New AI section inserted above!" });
+      setTimeout(() => setAiStatus(null), 3500);
+    } else {
+      setAiStatus({ type: "error", message: "Failed to insert section." });
+    }
+  };
+
   const handleCopySectionClick = useCallback(async () => {
     if (!canCopySectionCode || !onCopySectionCode) return;
     await onCopySectionCode();
@@ -594,7 +690,7 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
 
   return (
     <div className="style-inspector-container" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Top Main Tab Switcher: Components vs Styles */}
+      {/* Top Main Tab Switcher: Components, AI, Styles */}
       <div 
         style={{
           display: "flex",
@@ -614,8 +710,8 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: "6px",
-            padding: "6px 12px",
+            gap: "5px",
+            padding: "6px 8px",
             borderRadius: "6px",
             border: activeTab === "components" ? "1px solid #cbd5e1" : "1px solid transparent",
             background: activeTab === "components" ? "#ffffff" : "transparent",
@@ -633,14 +729,39 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
 
         <button
           type="button"
+          onClick={() => handleTabClick("ai")}
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "5px",
+            padding: "6px 8px",
+            borderRadius: "6px",
+            border: activeTab === "ai" ? "1px solid #c7d2fe" : "1px solid transparent",
+            background: activeTab === "ai" ? "#ffffff" : "transparent",
+            color: activeTab === "ai" ? "#4f46e5" : "#64748b",
+            fontWeight: activeTab === "ai" ? "700" : "600",
+            fontSize: "11.5px",
+            cursor: "pointer",
+            boxShadow: activeTab === "ai" ? "0 1px 3px rgba(79, 70, 229, 0.1)" : "none",
+            transition: "all 0.15s ease",
+          }}
+        >
+          <Sparkles size={13} color={activeTab === "ai" ? "#4f46e5" : "#64748b"} />
+          <span>AI</span>
+        </button>
+
+        <button
+          type="button"
           onClick={() => handleTabClick("styles")}
           style={{
             flex: 1,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: "6px",
-            padding: "6px 12px",
+            gap: "5px",
+            padding: "6px 8px",
             borderRadius: "6px",
             border: activeTab === "styles" ? "1px solid #cbd5e1" : "1px solid transparent",
             background: activeTab === "styles" ? "#ffffff" : "transparent",
@@ -1271,7 +1392,305 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
         </div>
       )}
 
-      {/* -------------------- TAB 2: DEVTOOLS STYLE INSPECTOR & DOM TREE -------------------- */}
+      {/* -------------------- TAB 2: AI STUDIO (REPLACE & INSERT SECTIONS) -------------------- */}
+      {activeTab === "ai" && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#f8fafc" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            
+            {/* Target Section Selection Header Card */}
+            <div
+              style={{
+                background: "#ffffff",
+                border: canCopySectionCode ? "1px solid #c7d2fe" : "1px solid #e2e8f0",
+                borderRadius: "8px",
+                padding: "12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                  <div style={{ width: "22px", height: "22px", borderRadius: "5px", background: canCopySectionCode ? "#e0e7ff" : "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Code2 size={13} color={canCopySectionCode ? "#4f46e5" : "#64748b"} />
+                  </div>
+                  <span style={{ fontSize: "11.5px", fontWeight: "700", color: "#0f172a" }}>
+                    {canCopySectionCode ? "Active Targeted Section" : "No Section Selected"}
+                  </span>
+                </div>
+                {canCopySectionCode && (
+                  <span style={{ fontSize: "10px", padding: "2px 6px", borderRadius: "4px", background: "#ecfdf5", color: "#059669", fontWeight: "700" }}>
+                    Ready
+                  </span>
+                )}
+              </div>
+
+              {canCopySectionCode ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <p style={{ margin: 0, fontSize: "11px", color: "#64748b", lineHeight: "15px" }}>
+                    Copy this section's HTML to give to your AI, or replace it with the AI's generated output.
+                  </p>
+
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={handleCopySectionClick}
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px",
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: copySectionStatus === "error" ? "1px solid #fecaca" : "1px solid #cbd5e1",
+                        background: copySectionStatus === "copied" ? "#ecfdf5" : "#ffffff",
+                        color: copySectionStatus === "copied" ? "#047857" : "#1e293b",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      {copySectionStatus === "copied" ? <Check size={12} color="#047857" /> : <Copy size={12} />}
+                      <span>{copySectionStatus === "copied" ? "Copied HTML!" : "Copy Section HTML"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleCopyAiPrompt}
+                      title="Copies formatted AI prompt with section code attached"
+                      style={{
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "6px",
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: "1px solid #c7d2fe",
+                        background: copiedPromptStatus ? "#ecfdf5" : "#f5f3ff",
+                        color: copiedPromptStatus ? "#047857" : "#6d28d9",
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        cursor: "pointer",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      {copiedPromptStatus ? <Check size={12} color="#047857" /> : <Bot size={12} />}
+                      <span>{copiedPromptStatus ? "Prompt Copied!" : "Copy with AI Prompt"}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ background: "#f8fafc", padding: "8px 10px", borderRadius: "6px", border: "1px dashed #cbd5e1" }}>
+                  <p style={{ margin: 0, fontSize: "11px", color: "#64748b", lineHeight: "16px" }}>
+                    👉 <strong>Tip:</strong> Click any element or section in the email preview to target it for AI copying & injection.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* AI Code Input & Injection Action Card */}
+            <div
+              style={{
+                background: "#ffffff",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                padding: "12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Sparkles size={14} color="#4f46e5" />
+                  <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
+                    Paste AI-Generated HTML
+                  </span>
+                </div>
+                {aiCodeInput.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setAiCodeInput("")}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#94a3b8",
+                      fontSize: "10.5px",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "3px",
+                      padding: "2px 4px",
+                    }}
+                  >
+                    <Trash2 size={11} />
+                    <span>Clear</span>
+                  </button>
+                )}
+              </div>
+
+              <textarea
+                value={aiCodeInput}
+                onChange={(e) => handleAiCodeChange(e.target.value)}
+                placeholder="Paste the modified or newly generated HTML output from your AI agent here..."
+                style={{
+                  width: "100%",
+                  minHeight: "150px",
+                  maxHeight: "320px",
+                  padding: "10px",
+                  borderRadius: "6px",
+                  border: "1px solid #cbd5e1",
+                  background: "#0f172a",
+                  color: "#f8fafc",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  fontSize: "11px",
+                  lineHeight: "1.5",
+                  resize: "vertical",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+                spellCheck={false}
+              />
+
+              {/* Status Banner */}
+              {aiStatus && (
+                <div
+                  style={{
+                    padding: "7px 10px",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: aiStatus.type === "success" ? "#ecfdf5" : "#fef2f2",
+                    color: aiStatus.type === "success" ? "#065f46" : "#b91c1c",
+                    border: aiStatus.type === "success" ? "1px solid #a7f3d0" : "1px solid #fecaca",
+                  }}
+                >
+                  {aiStatus.type === "success" ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                  <span>{aiStatus.message}</span>
+                </div>
+              )}
+
+              {/* Injection Action Buttons */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "2px" }}>
+                {/* 1. Replace Selected Section */}
+                <button
+                  type="button"
+                  onClick={handleExecuteReplace}
+                  disabled={!aiCodeInput.trim() || !canCopySectionCode}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                    padding: "8px 12px",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: (!aiCodeInput.trim() || !canCopySectionCode) ? "#e2e8f0" : "#4f46e5",
+                    color: (!aiCodeInput.trim() || !canCopySectionCode) ? "#94a3b8" : "#ffffff",
+                    fontSize: "11.5px",
+                    fontWeight: "700",
+                    cursor: (!aiCodeInput.trim() || !canCopySectionCode) ? "not-allowed" : "pointer",
+                    boxShadow: (!aiCodeInput.trim() || !canCopySectionCode) ? "none" : "0 1px 3px rgba(79, 70, 229, 0.3)",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  <RefreshCw size={12} />
+                  <span>Replace Selected Section</span>
+                </button>
+
+                {/* 2. Insert Below & Above Row */}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={handleExecuteInsertBelow}
+                    disabled={!aiCodeInput.trim()}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "5px",
+                      padding: "7px 10px",
+                      borderRadius: "6px",
+                      border: !aiCodeInput.trim() ? "1px solid #e2e8f0" : "1px solid #cbd5e1",
+                      background: !aiCodeInput.trim() ? "#f8fafc" : "#ffffff",
+                      color: !aiCodeInput.trim() ? "#94a3b8" : "#334155",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: !aiCodeInput.trim() ? "not-allowed" : "pointer",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    <ArrowDownCircle size={12} color={!aiCodeInput.trim() ? "#94a3b8" : "#059669"} />
+                    <span>Insert Below</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExecuteInsertAbove}
+                    disabled={!aiCodeInput.trim()}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "5px",
+                      padding: "7px 10px",
+                      borderRadius: "6px",
+                      border: !aiCodeInput.trim() ? "1px solid #e2e8f0" : "1px solid #cbd5e1",
+                      background: !aiCodeInput.trim() ? "#f8fafc" : "#ffffff",
+                      color: !aiCodeInput.trim() ? "#94a3b8" : "#334155",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: !aiCodeInput.trim() ? "not-allowed" : "pointer",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    <ArrowUpCircle size={12} color={!aiCodeInput.trim() ? "#94a3b8" : "#4f46e5"} />
+                    <span>Insert Above</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Prompting Guidelines Helper Card */}
+            <div
+              style={{
+                background: "#ffffff",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                <HelpCircle size={12} color="#64748b" />
+                <span style={{ fontSize: "10.5px", fontWeight: "700", color: "#475569", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  AI Prompting Tips
+                </span>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: "16px", fontSize: "10.5px", color: "#64748b", lineHeight: "16px" }}>
+                <li>Keep wrapper dimensions at <code>max-width: 700px</code> or <code>100%</code>.</li>
+                <li>Inline CSS ensures 100% compatibility across Gmail, Apple Mail & Outlook.</li>
+                <li>You can undo any AI injection instantly using <code>Ctrl+Z</code>.</li>
+              </ul>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- TAB 3: DEVTOOLS STYLE INSPECTOR & DOM TREE -------------------- */}
       {activeTab === "styles" && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Chrome DevTools Elements Tree View (Upside Collapsible Panel) */}
@@ -1619,51 +2038,31 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (viewMode === "mobile") {
-                    // Mobile-only alignment: switch mobile responsive class on image wrapper / column
-                    let targetNode: HTMLElement | null = selectedElement;
-                    let foundWrapper = false;
-                    while (targetNode && targetNode !== domRoot) {
-                      if (
-                        targetNode.classList?.contains("mobile-center-img") ||
-                        targetNode.classList?.contains("mobile-align-center") ||
-                        targetNode.classList?.contains("mobile-align-right") ||
-                        targetNode.classList?.contains("mobile-align-left") ||
-                        targetNode.classList?.contains("header-col")
-                      ) {
-                        targetNode.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-right");
-                        targetNode.classList.add("mobile-align-left");
-                        foundWrapper = true;
-                      }
-                      targetNode = targetNode.parentElement;
-                    }
-                    if (!foundWrapper) {
-                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
-                      col.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-right");
-                      col.classList.add("mobile-align-left");
-                    }
-                    onUpdateStyle("text-align", inlineStyles["text-align"] || "left");
-                  } else {
-                    // Desktop alignment: update standard inline styles
-                    onUpdateStyle("text-align", "left");
-                    onUpdateStyle("margin-left", "0px");
-                    onUpdateStyle("margin-right", "auto");
-                    if (selectedElement.tagName === "IMG") {
-                      selectedElement.setAttribute("align", "left");
-                    }
+                  if (onQuickAlign) {
+                    onQuickAlign("left");
                   }
                 }}
-                title={viewMode === "mobile" ? "Align Left on Mobile (preserves bottom spacing & desktop alignment)" : "Align Left on Desktop"}
+                title={viewMode === "mobile" ? "Align Left on Mobile (responsive class)" : "Align Left on Desktop"}
                 style={{
                   padding: "3px 7px",
                   border: "none",
                   background: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-left") || selectedElement.classList?.contains("mobile-align-left"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "left" || selectedElement.getAttribute("align") === "left"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "left" ||
+                      selectedElement.style?.textAlign === "left" ||
+                      selectedElement.getAttribute("align") === "left" ||
+                      (selectedElement.tagName === "IMG" && (inlineStyles["margin-left"] === "0px" || inlineStyles["margin-left"] === "0"))
+                    ))
                   ) ? "#e0e7ff" : "transparent",
                   color: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-left") || selectedElement.classList?.contains("mobile-align-left"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "left" || selectedElement.getAttribute("align") === "left"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "left" ||
+                      selectedElement.style?.textAlign === "left" ||
+                      selectedElement.getAttribute("align") === "left" ||
+                      (selectedElement.tagName === "IMG" && (inlineStyles["margin-left"] === "0px" || inlineStyles["margin-left"] === "0"))
+                    ))
                   ) ? "#4f46e5" : "#475569",
                   cursor: "pointer",
                   display: "flex",
@@ -1678,51 +2077,31 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (viewMode === "mobile") {
-                    // Mobile-only alignment: switch mobile responsive class
-                    let targetNode: HTMLElement | null = selectedElement;
-                    let foundWrapper = false;
-                    while (targetNode && targetNode !== domRoot) {
-                      if (
-                        targetNode.classList?.contains("mobile-center-img") ||
-                        targetNode.classList?.contains("mobile-align-center") ||
-                        targetNode.classList?.contains("mobile-align-right") ||
-                        targetNode.classList?.contains("mobile-align-left") ||
-                        targetNode.classList?.contains("header-col")
-                      ) {
-                        targetNode.classList.remove("mobile-align-left", "mobile-align-right");
-                        targetNode.classList.add("mobile-align-center");
-                        foundWrapper = true;
-                      }
-                      targetNode = targetNode.parentElement;
-                    }
-                    if (!foundWrapper) {
-                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
-                      col.classList.remove("mobile-align-left", "mobile-align-right");
-                      col.classList.add("mobile-align-center");
-                    }
-                    onUpdateStyle("text-align", inlineStyles["text-align"] || "center");
-                  } else {
-                    // Desktop alignment: update standard inline styles
-                    onUpdateStyle("text-align", "center");
-                    onUpdateStyle("margin-left", "auto");
-                    onUpdateStyle("margin-right", "auto");
-                    if (selectedElement.tagName === "IMG") {
-                      selectedElement.setAttribute("align", "center");
-                    }
+                  if (onQuickAlign) {
+                    onQuickAlign("center");
                   }
                 }}
-                title={viewMode === "mobile" ? "Align Center on Mobile (preserves bottom spacing & desktop alignment)" : "Align Center on Desktop"}
+                title={viewMode === "mobile" ? "Align Center on Mobile (responsive class)" : "Align Center on Desktop"}
                 style={{
                   padding: "3px 7px",
                   border: "none",
                   background: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-center") || selectedElement.closest(".mobile-center-img") || selectedElement.classList?.contains("mobile-align-center") || selectedElement.classList?.contains("mobile-center-img"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "center" || selectedElement.getAttribute("align") === "center"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "center" ||
+                      selectedElement.style?.textAlign === "center" ||
+                      selectedElement.getAttribute("align") === "center" ||
+                      (selectedElement.tagName === "IMG" && inlineStyles["margin-left"] === "auto" && inlineStyles["margin-right"] === "auto")
+                    ))
                   ) ? "#e0e7ff" : "transparent",
                   color: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-center") || selectedElement.closest(".mobile-center-img") || selectedElement.classList?.contains("mobile-align-center") || selectedElement.classList?.contains("mobile-center-img"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "center" || selectedElement.getAttribute("align") === "center"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "center" ||
+                      selectedElement.style?.textAlign === "center" ||
+                      selectedElement.getAttribute("align") === "center" ||
+                      (selectedElement.tagName === "IMG" && inlineStyles["margin-left"] === "auto" && inlineStyles["margin-right"] === "auto")
+                    ))
                   ) ? "#4f46e5" : "#475569",
                   cursor: "pointer",
                   display: "flex",
@@ -1737,51 +2116,31 @@ export const StyleInspector: React.FC<StyleInspectorProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (viewMode === "mobile") {
-                    // Mobile-only alignment: switch mobile responsive class
-                    let targetNode: HTMLElement | null = selectedElement;
-                    let foundWrapper = false;
-                    while (targetNode && targetNode !== domRoot) {
-                      if (
-                        targetNode.classList?.contains("mobile-center-img") ||
-                        targetNode.classList?.contains("mobile-align-center") ||
-                        targetNode.classList?.contains("mobile-align-right") ||
-                        targetNode.classList?.contains("mobile-align-left") ||
-                        targetNode.classList?.contains("header-col")
-                      ) {
-                        targetNode.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-left");
-                        targetNode.classList.add("mobile-align-right");
-                        foundWrapper = true;
-                      }
-                      targetNode = targetNode.parentElement;
-                    }
-                    if (!foundWrapper) {
-                      const col = selectedElement.closest("[class*='mj-column']") as HTMLElement || selectedElement;
-                      col.classList.remove("mobile-center-img", "mobile-align-center", "mobile-align-left");
-                      col.classList.add("mobile-align-right");
-                    }
-                    onUpdateStyle("text-align", inlineStyles["text-align"] || "right");
-                  } else {
-                    // Desktop alignment: update standard inline styles
-                    onUpdateStyle("text-align", "right");
-                    onUpdateStyle("margin-left", "auto");
-                    onUpdateStyle("margin-right", "0px");
-                    if (selectedElement.tagName === "IMG") {
-                      selectedElement.setAttribute("align", "right");
-                    }
+                  if (onQuickAlign) {
+                    onQuickAlign("right");
                   }
                 }}
-                title={viewMode === "mobile" ? "Align Right on Mobile (preserves bottom spacing & desktop alignment)" : "Align Right on Desktop"}
+                title={viewMode === "mobile" ? "Align Right on Mobile (responsive class)" : "Align Right on Desktop"}
                 style={{
                   padding: "3px 7px",
                   border: "none",
                   background: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-right") || selectedElement.classList?.contains("mobile-align-right"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "right" || selectedElement.getAttribute("align") === "right"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "right" ||
+                      selectedElement.style?.textAlign === "right" ||
+                      selectedElement.getAttribute("align") === "right" ||
+                      (selectedElement.tagName === "IMG" && (inlineStyles["margin-right"] === "0px" || inlineStyles["margin-right"] === "0"))
+                    ))
                   ) ? "#e0e7ff" : "transparent",
                   color: (
                     (viewMode === "mobile" && (selectedElement.closest(".mobile-align-right") || selectedElement.classList?.contains("mobile-align-right"))) ||
-                    (viewMode === "desktop" && (inlineStyles["text-align"] === "right" || selectedElement.getAttribute("align") === "right"))
+                    (viewMode === "desktop" && (
+                      inlineStyles["text-align"] === "right" ||
+                      selectedElement.style?.textAlign === "right" ||
+                      selectedElement.getAttribute("align") === "right" ||
+                      (selectedElement.tagName === "IMG" && (inlineStyles["margin-right"] === "0px" || inlineStyles["margin-right"] === "0"))
+                    ))
                   ) ? "#4f46e5" : "#475569",
                   cursor: "pointer",
                   display: "flex",

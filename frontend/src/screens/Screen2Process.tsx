@@ -13,7 +13,8 @@ import {
   ExternalLink, 
   Sparkles,
   RotateCw,
-  Crop
+  Crop,
+  FolderOpen
 } from "lucide-react";
 import { nativeIPC, PDFExtractionData, MarkedRegion, FooterPreset } from "../services/ipc";
 import { BrowserSelectModal } from "../components/BrowserSelectModal";
@@ -68,7 +69,35 @@ export const Screen2Process: React.FC<Screen2Props> = ({
   const [showPdfModal, setShowPdfModal] = useState(false);
   const [showAssetsModal, setShowAssetsModal] = useState(false);
   const [showBrowserModal, setShowBrowserModal] = useState(false);
+  const [showCompileConfirmModal, setShowCompileConfirmModal] = useState(false);
+  const [existingHtmlOnDisk, setExistingHtmlOnDisk] = useState<string | null>(null);
+  const [hasExistingHtml, setHasExistingHtml] = useState<boolean>(false);
   const [copied, setCopied] = useState(false);
+
+  const fileName = typeof pdfPath === "string" ? pdfPath.split(/[/\\]/).pop() || "email-design.pdf" : "email-design.pdf";
+  const baseName = fileName.replace(/\.[^/.]+$/, "");
+
+  // Detect if an existing HTML file is already present on disk in this project
+  useEffect(() => {
+    const checkHtmlOnDisk = async () => {
+      if (!extractData?.package_dir) return;
+      const htmlFile = `${extractData.package_dir}\\${baseName}.html`;
+      const res = await nativeIPC.readFile(htmlFile);
+      if (res.success && res.content && res.content.trim().length > 0) {
+        setExistingHtmlOnDisk(res.content);
+        setHasExistingHtml(true);
+        // If generatedHtml is currently empty, load the saved HTML into preview
+        if (!generatedHtml) {
+          setGeneratedHtml(res.content);
+          setCharCount(res.content.length);
+        }
+      } else {
+        setExistingHtmlOnDisk(null);
+        setHasExistingHtml(false);
+      }
+    };
+    checkHtmlOnDisk();
+  }, [extractData?.package_dir, baseName]);
 
   const handleOpenMjmlAgent = () => {
     const savedBrowser = localStorage.getItem("nocodemail_agent_browser");
@@ -96,8 +125,11 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
   };
 
-  const fileName = typeof pdfPath === "string" ? pdfPath.split(/[/\\]/).pop() || "email-design.pdf" : "email-design.pdf";
-  const baseName = fileName.replace(/\.[^/.]+$/, "");
+  const handleOpenFileSource = async () => {
+    if (extractData?.package_dir) {
+      await nativeIPC.openFolder(extractData.package_dir);
+    }
+  };
 
   // Notify parent of state changes to keep cache warm
   useEffect(() => {
@@ -122,21 +154,54 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         const data = await nativeIPC.extractPdf(pdfPath, emailWidth, targetPage, markedRegions);
         setExtractData(data);
         if (data?.package_dir) {
-          if (selectedFooter?.code) {
-            const footerSavePath = `${data.package_dir}\\footer_preset.html`;
-            await nativeIPC.saveFile(footerSavePath, selectedFooter.code);
+          // 1. Save metadata file to disk inside the project package
+          try {
+            const projectMeta = {
+              name: fileName,
+              pdf_path: pdfPath,
+              target_page: targetPage || 1,
+              email_width: emailWidth || 700,
+              total_pages: data.total_pages || 1,
+              package_dir: data.package_dir,
+              timestamp: Date.now(),
+              updated_at: new Date().toISOString()
+            };
+            await nativeIPC.saveFile(`${data.package_dir}\\project_meta.json`, JSON.stringify(projectMeta, null, 2));
+          } catch (metaErr) {
+            console.warn("Failed to save project_meta.json:", metaErr);
           }
+
+          if (selectedFooter?.code) {
+            const footerSavePathTxt = `${data.package_dir}\\footer_preset.html.txt`;
+            await nativeIPC.saveFile(footerSavePathTxt, selectedFooter.code);
+          }
+
+          // 2. Persist in project history (localStorage)
           try {
             const raw = localStorage.getItem("nocodemail_recent_projects");
             if (raw) {
               const list = JSON.parse(raw);
               if (Array.isArray(list)) {
+                let found = false;
                 for (const item of list) {
                   if (item.path === pdfPath) {
                     item.package_dir = data.package_dir;
                     item.target_page = targetPage || 1;
-                    item.email_width = emailWidth;
+                    item.email_width = emailWidth || 700;
+                    found = true;
                   }
+                }
+                if (!found) {
+                  list.unshift({
+                    id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                    name: fileName,
+                    path: pdfPath,
+                    type: "pdf",
+                    timestamp: Date.now(),
+                    package_dir: data.package_dir,
+                    target_page: targetPage || 1,
+                    email_width: emailWidth || 700,
+                  });
                 }
                 localStorage.setItem("nocodemail_recent_projects", JSON.stringify(list));
               }
@@ -228,12 +293,15 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         setGeneratedHtml(compiledHtml);
         setCharCount(compiledHtml.length);
 
-        // 2. Save production HTML and MJML source to disk in the AI package folder
+        // 2. Save MJML source so it's persisted; only auto-write HTML if no previous HTML existed
         if (extractData?.package_dir) {
-          const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
           const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
-          await nativeIPC.saveFile(savePathHtml, compiledHtml);
           await nativeIPC.saveFile(savePathMjml, text);
+
+          if (!hasExistingHtml) {
+            const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
+            await nativeIPC.saveFile(savePathHtml, compiledHtml);
+          }
         }
       }
     } catch (e) {
@@ -241,14 +309,114 @@ export const Screen2Process: React.FC<Screen2Props> = ({
     }
   };
 
-  const handleOpenInEditor = () => {
+  // 1. User clicks "Update previous HTML" -> directly opens saved HTML in editor without confirmation
+  const handleOpenPreviousHtml = () => {
+    const contentToOpen = existingHtmlOnDisk || generatedHtml;
     const fullHtmlPath = extractData?.package_dir
       ? `${extractData.package_dir}\\${baseName}.html`
       : `${baseName}.html`;
     if (extractData?.package_dir) {
       localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
     }
-    onOpenEditor(generatedHtml, fullHtmlPath);
+    onOpenEditor(contentToOpen, fullHtmlPath);
+  };
+
+  // 2. User confirms compiling latest MJML into fresh HTML and updating disk file
+  const handleConfirmCompileNewHtml = async () => {
+    setShowCompileConfirmModal(false);
+    let htmlToSave = generatedHtml;
+    if (!htmlToSave && mjmlText.trim()) {
+      try {
+        const mjml2html = await getMjmlCompiler();
+        const result = await mjml2html(mjmlText, {
+          keepComments: false,
+          minify: false,
+          validationLevel: "soft",
+        });
+        htmlToSave = result.html || "";
+        setGeneratedHtml(htmlToSave);
+      } catch (e) {
+        console.error("Compile error on update:", e);
+      }
+    }
+
+    if (extractData?.package_dir && htmlToSave) {
+      const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
+      const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+      const savePathMeta = `${extractData.package_dir}\\project_meta.json`;
+      await nativeIPC.saveFile(savePathHtml, htmlToSave);
+      await nativeIPC.saveFile(savePathMjml, mjmlText);
+      try {
+        const metaObj = {
+          name: fileName,
+          pdf_path: pdfPath,
+          target_page: targetPage || 1,
+          email_width: emailWidth || 700,
+          package_dir: extractData.package_dir,
+          timestamp: Date.now(),
+          updated_at: new Date().toISOString()
+        };
+        await nativeIPC.saveFile(savePathMeta, JSON.stringify(metaObj, null, 2));
+      } catch {}
+      setExistingHtmlOnDisk(htmlToSave);
+    }
+
+    const fullHtmlPath = extractData?.package_dir
+      ? `${extractData.package_dir}\\${baseName}.html`
+      : `${baseName}.html`;
+    if (extractData?.package_dir) {
+      localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
+    }
+    onOpenEditor(htmlToSave, fullHtmlPath);
+  };
+
+  // 3. Brand new project without existing HTML -> compile and open directly
+  const handleDirectOpenInEditor = async () => {
+    let htmlToOpen = generatedHtml;
+    if (!htmlToOpen && mjmlText.trim()) {
+      try {
+        const mjml2html = await getMjmlCompiler();
+        const result = await mjml2html(mjmlText, {
+          keepComments: false,
+          minify: false,
+          validationLevel: "soft",
+        });
+        htmlToOpen = result.html || "";
+        setGeneratedHtml(htmlToOpen);
+      } catch (e) {
+        console.error("Compile error:", e);
+      }
+    }
+
+    if (extractData?.package_dir && htmlToOpen) {
+      const savePathHtml = `${extractData.package_dir}\\${baseName}.html`;
+      const savePathMjml = `${extractData.package_dir}\\${baseName}.mjml`;
+      const savePathMeta = `${extractData.package_dir}\\project_meta.json`;
+      await nativeIPC.saveFile(savePathHtml, htmlToOpen);
+      await nativeIPC.saveFile(savePathMjml, mjmlText);
+      try {
+        const metaObj = {
+          name: fileName,
+          pdf_path: pdfPath,
+          target_page: targetPage || 1,
+          email_width: emailWidth || 700,
+          package_dir: extractData.package_dir,
+          timestamp: Date.now(),
+          updated_at: new Date().toISOString()
+        };
+        await nativeIPC.saveFile(savePathMeta, JSON.stringify(metaObj, null, 2));
+      } catch {}
+      setExistingHtmlOnDisk(htmlToOpen);
+      setHasExistingHtml(true);
+    }
+
+    const fullHtmlPath = extractData?.package_dir
+      ? `${extractData.package_dir}\\${baseName}.html`
+      : `${baseName}.html`;
+    if (extractData?.package_dir) {
+      localStorage.setItem("nocodemail_last_pkg_dir", extractData.package_dir);
+    }
+    onOpenEditor(htmlToOpen, fullHtmlPath);
   };
 
   const copyToClipboard = (text: string) => {
@@ -559,8 +727,42 @@ export const Screen2Process: React.FC<Screen2Props> = ({
           </div>
         </section>
 
-        {/* Central MJML Agent Launcher */}
-        <div className="section-down-arrow-container" style={{ display: "flex", justifyContent: "center", alignItems: "center", margin: "16px 0", gap: "10px" }}>
+        {/* Central Action Launchers: File Source (Orange) + MJML Agent */}
+        <div className="section-down-arrow-container" style={{ display: "flex", justifyContent: "center", alignItems: "center", margin: "16px 0", gap: "12px" }}>
+          {/* File Source Folder Button (Orange) */}
+          <button
+            type="button"
+            onClick={handleOpenFileSource}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "linear-gradient(135deg, #ea580c, #f59e0b)",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "24px",
+              padding: "10px 22px",
+              fontSize: "13.5px",
+              fontWeight: "700",
+              cursor: "pointer",
+              boxShadow: "0 4px 16px rgba(234, 88, 12, 0.35)",
+              transition: "all 0.18s cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateY(-2px) scale(1.03)";
+              e.currentTarget.style.boxShadow = "0 6px 22px rgba(234, 88, 12, 0.45)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "none";
+              e.currentTarget.style.boxShadow = "0 4px 16px rgba(234, 88, 12, 0.35)";
+            }}
+            title={extractData?.package_dir ? `Open ${extractData.package_dir} in File Explorer` : "Open Project Package Directory"}
+          >
+            <FolderOpen size={16} />
+            <span>File Source</span>
+          </button>
+
+          {/* MJML Agent Launcher */}
           <button
             type="button"
             onClick={handleOpenMjmlAgent}
@@ -603,11 +805,92 @@ export const Screen2Process: React.FC<Screen2Props> = ({
               <h3>MJML → HTML Conversion</h3>
               <p>Paste the MJML generated by AI to convert it into clean, responsive HTML.</p>
             </div>
-            <button className="open-in-editor-btn-main" onClick={handleOpenInEditor} disabled={!generatedHtml}>
-              <Sparkles size={16} />
-              <span>Open in Editor</span>
-              <ExternalLink size={14} />
-            </button>
+            
+            {hasExistingHtml ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                {/* 1. Compile new HTML Button (Opens confirmation modal to recompile MJML and overwrite) */}
+                <button
+                  type="button"
+                  onClick={() => setShowCompileConfirmModal(true)}
+                  disabled={!mjmlText.trim() && !generatedHtml}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    background: "linear-gradient(135deg, #7c3aed, #9333ea)",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                    cursor: (!mjmlText.trim() && !generatedHtml) ? "not-allowed" : "pointer",
+                    opacity: (!mjmlText.trim() && !generatedHtml) ? 0.5 : 1,
+                    boxShadow: "0 2px 8px rgba(124, 58, 237, 0.25)",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (mjmlText.trim() || generatedHtml) {
+                      e.currentTarget.style.transform = "translateY(-1px)";
+                      e.currentTarget.style.boxShadow = "0 4px 12px rgba(124, 58, 237, 0.35)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "none";
+                    e.currentTarget.style.boxShadow = "0 2px 8px rgba(124, 58, 237, 0.25)";
+                  }}
+                  title="Recompile MJML and overwrite HTML file"
+                >
+                  <Sparkles size={15} />
+                  <span>Compile new HTML</span>
+                  <ExternalLink size={13} />
+                </button>
+
+                {/* 2. Update previous HTML Button (Directly opens previously saved HTML in editor without modal) */}
+                <button
+                  type="button"
+                  onClick={handleOpenPreviousHtml}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    background: "linear-gradient(135deg, #2563eb, #3b82f6)",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    fontSize: "12px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(37, 99, 235, 0.25)",
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.transform = "translateY(-1px)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(37, 99, 235, 0.35)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.transform = "none";
+                    e.currentTarget.style.boxShadow = "0 2px 8px rgba(37, 99, 235, 0.25)";
+                  }}
+                  title="Open previously edited HTML file in editor (preserves your manual edits)"
+                >
+                  <FileText size={15} />
+                  <span>Update previous HTML</span>
+                  <ExternalLink size={13} />
+                </button>
+              </div>
+            ) : (
+              <button
+                className="open-in-editor-btn-main"
+                onClick={handleDirectOpenInEditor}
+                disabled={!generatedHtml && !mjmlText.trim()}
+              >
+                <Sparkles size={16} />
+                <span>Open in Editor</span>
+                <ExternalLink size={14} />
+              </button>
+            )}
           </div>
 
           <div className="mjml-split-grid">
@@ -765,7 +1048,7 @@ export const Screen2Process: React.FC<Screen2Props> = ({
         <div className="modal-backdrop" onClick={() => setShowJsonModal(false)}>
           <div className="modal-window" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Extracted Design JSON</h3>
+              <h3>Extracted Design JSON ({baseName}_design.json.txt)</h3>
               <button className="close-btn" onClick={() => setShowJsonModal(false)}>✕</button>
             </div>
             <div className="modal-body">
@@ -890,6 +1173,91 @@ export const Screen2Process: React.FC<Screen2Props> = ({
                   Generating snapshot preview...
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compile New HTML Confirmation Modal */}
+      {showCompileConfirmModal && (
+        <div className="modal-backdrop" onClick={() => setShowCompileConfirmModal(false)}>
+          <div 
+            className="modal-window" 
+            style={{ 
+              width: "500px", 
+              maxWidth: "92vw", 
+              padding: "0",
+              overflow: "hidden",
+              borderRadius: "14px",
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+              border: "1px solid #e2e8f0"
+            }} 
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "rgba(124, 58, 237, 0.12)", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Sparkles size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>Compile New HTML?</h3>
+                  <p style={{ margin: 0, fontSize: "12px", color: "#64748b" }}>Recompiles MJML & overwrites existing file</p>
+                </div>
+              </div>
+              <button 
+                className="close-btn" 
+                onClick={() => setShowCompileConfirmModal(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: "18px", color: "#94a3b8" }}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div style={{ padding: "20px 24px", color: "#334155", fontSize: "13.5px", lineHeight: "1.6" }}>
+              <p style={{ margin: "0 0 12px" }}>
+                An existing HTML file <strong>{baseName}.html</strong> was found in this project.
+              </p>
+              <div style={{ background: "#fffbeb", border: "1px solid #fef3c7", borderRadius: "8px", padding: "12px 14px", fontSize: "12.5px", color: "#b45309" }}>
+                ⚠️ <strong>Note:</strong> Compiling new HTML will recompile the latest MJML and <strong>overwrite</strong> <code>{baseName}.html</code> on disk. Any previous custom edits made directly to the HTML will be replaced.
+              </div>
+            </div>
+
+            <div style={{ padding: "16px 24px", background: "#f8fafc", borderTop: "1px solid #f1f5f9", display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button 
+                onClick={() => setShowCompileConfirmModal(false)}
+                style={{ 
+                  padding: "8px 16px", 
+                  borderRadius: "8px", 
+                  border: "1px solid #cbd5e1", 
+                  background: "#ffffff", 
+                  color: "#475569", 
+                  fontWeight: "600", 
+                  fontSize: "13px", 
+                  cursor: "pointer" 
+                }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleConfirmCompileNewHtml}
+                style={{ 
+                  padding: "8px 18px", 
+                  borderRadius: "8px", 
+                  border: "none", 
+                  background: "linear-gradient(135deg, #7c3aed, #9333ea)", 
+                  color: "#ffffff", 
+                  fontWeight: "600", 
+                  fontSize: "13px", 
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  boxShadow: "0 4px 12px rgba(124, 58, 237, 0.25)"
+                }}
+              >
+                <span>Yes, Compile & Open</span>
+                <ArrowRight size={14} />
+              </button>
             </div>
           </div>
         </div>
